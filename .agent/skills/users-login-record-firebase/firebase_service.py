@@ -12,6 +12,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 import json
+import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
 
@@ -25,7 +26,7 @@ def _initialize_firebase():
     """Initialize Firebase Admin SDK if not already initialized."""
     global _firebase_app, _firestore_client
     
-    if _firebase_app is not None:
+    if _firebase_app is not None and _firestore_client is not None:
         return True
     
 
@@ -147,7 +148,7 @@ def log_login_event(
     Returns:
         True if successfully logged, False otherwise
     """
-    if not _initialize_firebase():
+    if not _initialize_firebase() or _firestore_client is None:
         return False
     
     try:
@@ -184,7 +185,7 @@ def get_user_login_history(user_email: str, limit: int = 50) -> list:
     Returns:
         List of login records, ordered by timestamp descending
     """
-    if not _initialize_firebase():
+    if not _initialize_firebase() or _firestore_client is None:
         return []
     
     try:
@@ -197,7 +198,7 @@ def get_user_login_history(user_email: str, limit: int = 50) -> list:
             .stream()
         )
         
-        return [{"id": doc.id, **doc.to_dict()} for doc in docs]
+        return [{"id": doc.id, **(doc.to_dict() or {})} for doc in docs]
         
     except Exception as e:
         print(f"⚠️ Failed to get login history: {e}")
@@ -216,7 +217,7 @@ def get_all_login_history(limit: int = 100, sort_by: str = "timestamp", sort_dir
     Returns:
         List of all login records, ordered by timestamp descending
     """
-    if not _initialize_firebase():
+    if not _initialize_firebase() or _firestore_client is None:
         return []
     
     try:
@@ -228,7 +229,7 @@ def get_all_login_history(limit: int = 100, sort_by: str = "timestamp", sort_dir
             .stream()
         )
         
-        return [{"id": doc.id, **doc.to_dict()} for doc in docs]
+        return [{"id": doc.id, **(doc.to_dict() or {})} for doc in docs]
         
     except Exception as e:
         print(f"⚠️ Failed to get all login history: {e}")
