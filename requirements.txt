@@ -1,0 +1,13 @@
+pandas
+pandas-datareader
+plotly
+requests
+streamlit>=1.43.1
+tqdm
+websocket-client
+lxml
+Authlib==1.6.5
+firebase-admin
+streamlit-oauth
+playwright
+firebase_admin
