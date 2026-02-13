@@ -571,26 +571,54 @@ def scrape_news_for_instrument(page, instrument: str, MAX_NEWS_ITEMS=2) -> list[
     return news_items
 
 
+def load_existing_headlines(csv_path: str) -> set[str]:
+    """Load existing headlines from a CSV file into a set for deduplication."""
+    headlines = set()
+    if os.path.isfile(csv_path):
+        try:
+            with open(csv_path, "r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    h = row.get("headline", "").strip()
+                    if h:
+                        headlines.add(h)
+            logger.info(f"Loaded {len(headlines)} existing headlines from {csv_path}")
+        except Exception as e:
+            logger.warning(f"Could not read existing CSV {csv_path}: {e}")
+    return headlines
+
+
 def save_to_csv(news_items: list[dict], instrument: str, output_dir: str):
-    """Save news items to a CSV file."""
+    """Save news items to a CSV file. Appends if the file already exists.
+    
+    Caller is responsible for deduplication — only pass new items.
+    """
     filename = os.path.join(output_dir, f"ig.news.{instrument}.csv")
-    with open(filename, "w", newline="", encoding="utf-8") as f:
+    file_exists = os.path.isfile(filename)
+    with open(filename, "a" if file_exists else "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["date", "headline", "link"])
-        writer.writeheader()
-        # Filter items for CSV (don't include content)
+        if not file_exists:
+            writer.writeheader()
         csv_items = [{"date": i["date"], "headline": i["headline"], "link": i["link"]} for i in news_items]
         writer.writerows(csv_items)
-    logger.info(f"Saved {len(news_items)} items to {filename}")
+    logger.info(f"Appended {len(news_items)} new items to {filename}")
 
 
 def save_to_markdown(news_items: list[dict], instrument: str, output_dir: str):
-    """Save news items to a Markdown file."""
+    """Save news items to a Markdown file. Appends if the file already exists.
+    
+    Caller is responsible for deduplication — only pass new items.
+    """
     filename = os.path.join(output_dir, f"ig.news.{instrument}.md")
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(f"# News for {instrument.capitalize()}\n\n")
-        f.write(f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        f.write("---\n\n")
-        
+    file_exists = os.path.isfile(filename)
+    with open(filename, "a" if file_exists else "w", encoding="utf-8") as f:
+        if not file_exists:
+            f.write(f"# News for {instrument.capitalize()}\n\n")
+            f.write(f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("---\n\n")
+        else:
+            f.write(f"\n## — Updated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} —\n\n")
+
         for item in news_items:
             f.write(f"## {item['headline']}\n\n")
             f.write(f"- **Date:** {item['date']}\n")
@@ -598,7 +626,44 @@ def save_to_markdown(news_items: list[dict], instrument: str, output_dir: str):
             f.write("### Content\n\n")
             f.write(f"{item['content']}\n\n")
             f.write("---\n\n")
-    logger.info(f"Saved {len(news_items)} items to {filename}")
+    logger.info(f"Appended {len(news_items)} new items to {filename}")
+
+
+def scrape_open_positions(page) -> list[str]:
+    """Navigate to Positions tab and scrape all instrument names.
+
+    Returns a deduplicated list of instrument names with trailing
+    qualifiers like ' (24 Hours)' stripped.
+    """
+    logger.info("Scraping open positions to build instrument list...")
+
+    # Click on the Positions tab
+    try:
+        page.get_by_role("button", name="Positions").click()
+        page.wait_for_timeout(5000)  # wait for position rows to load
+    except Exception as e:
+        logger.error(f"Could not navigate to Positions tab: {e}")
+        return []
+
+    instruments: list[str] = []
+    try:
+        name_elements = page.locator('[data-automation="instrumentName"]').all()
+        for el in name_elements:
+            try:
+                raw_name = (el.inner_text() or "").strip()
+                if not raw_name:
+                    continue
+                # Strip common trailing qualifiers like " (24 Hours)"
+                clean_name = re.sub(r"\s*\(.*?\)\s*$", "", raw_name).strip()
+                if clean_name and clean_name not in instruments:
+                    instruments.append(clean_name)
+            except Exception:
+                continue
+    except Exception as e:
+        logger.error(f"Failed to extract instrument names from Positions: {e}")
+
+    logger.info(f"Found {len(instruments)} instruments from open positions: {instruments}")
+    return instruments
 
 
 def run(playwright: Playwright, username, password, INSTRUMENTS, output_dir, MAX_NEWS_ITEMS = 5, headless=False
@@ -636,21 +701,52 @@ def run(playwright: Playwright, username, password, INSTRUMENTS, output_dir, MAX
     # Wait for platform to fully load
     page.wait_for_timeout(15000)
     
+
+    # Scrape open positions if INSTRUMENTS is None (no --input provided)
+    if INSTRUMENTS is None:
+        INSTRUMENTS = []
+        try:
+            INSTRUMENTS = scrape_open_positions(page)
+            logger.info(f"Total instruments from open positions: {len(INSTRUMENTS)}")
+        except Exception as e:
+            logger.error(f"Failed to scrape/add open positions: {e}")
+        if not INSTRUMENTS:
+            logger.error("No instruments found from positions and no --input provided. Exiting.")
+            context.close()
+            browser.close()
+            sys.exit(1)
+
+
     # Navigate to News section once (using the original selector that worked)
     page.get_by_title("News").click()
     page.wait_for_timeout(2000)
     
     # Scrape news for each instrument
-    for instrument in INSTRUMENTS:
+    total_instruments = len(INSTRUMENTS)
+    for idx, instrument in enumerate(INSTRUMENTS):
         try:
             news_items = scrape_news_for_instrument(page, instrument, MAX_NEWS_ITEMS)
             if news_items:
-                save_to_csv(news_items, instrument, output_dir)
-                save_to_markdown(news_items, instrument, output_dir)
+                # Load existing headlines once to use for both CSV and MD dedup
+                csv_path = os.path.join(output_dir, f"ig.news.{instrument}.csv")
+                existing_headlines = load_existing_headlines(csv_path)
+                new_items = [i for i in news_items if i["headline"].strip() not in existing_headlines]
+
+                if new_items:
+                    logger.info(f"{len(new_items)} new items for {instrument} (out of {len(news_items)} scraped)")
+                    save_to_csv(new_items, instrument, output_dir)
+                    save_to_markdown(new_items, instrument, output_dir)
+                else:
+                    logger.info(f"All {len(news_items)} scraped headlines for {instrument} already exist — skipping save")
             else:
                 logger.info(f"No news items found for {instrument}")
+            
+            remaining = total_instruments - (idx + 1)
+            logger.info(f"All headlines for {instrument} collected, {remaining} more instruments to go")
         except Exception as e:
             logger.error(f"Error scraping news for {instrument}: {e}")
+            remaining = total_instruments - (idx + 1)
+            logger.info(f"Finished Attempt for {instrument}, {remaining} more instruments to go")
             continue
 
     # ---------------------
@@ -674,7 +770,7 @@ def main():
         "--output", type=str, default=".", help="Directory to save output files"
     )
     parser.add_argument(
-        "--input", type=str, default="company_name_to_ticker.json",help="Path to input file with company names or search terms (one per line)"
+        "--input", type=str, help="Path to input file with company names or search terms (one per line)"
     )
     parser.add_argument(
         "--max-news-items", type=int, default=5, help="Maximum number of news items to scrape per instrument"
@@ -688,13 +784,17 @@ def main():
         sys.exit(1)
     output_dir = args.output
     input_file = args.input
-    if not os.path.isfile(input_file):
+    if input_file is None:
+        # No input file — instruments will be scraped from open positions
+        company_names = None
+        logger.info("No --input provided; will scrape instruments from IG open positions.")
+    elif not os.path.isfile(input_file):
         logger.error(f"Input file not found: {input_file}")
         sys.exit(1)
     elif input_file.endswith(".json"):
         with open(input_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-            company_names = list(data.keys())
+        company_names = [" ".join(k.split()[:2]) for k in data.keys()]
     elif input_file.endswith(".csv"):
         company_names = []
         with open(input_file, "r", encoding="utf-8") as f:
