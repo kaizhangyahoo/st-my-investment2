@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import sys
 st.set_page_config(
     page_title="Portfolio Dashboard",
     page_icon="📈",
@@ -7,6 +8,8 @@ st.set_page_config(
 )
 
 # Import Firebase service for login logging and email/password auth
+sys.path.append(os.path.join(os.getcwd(), ".agent/skills/users-login-record-firebase/scripts"))
+
 try:
     from firebase_service import log_login_event, sign_in_with_email_password, sign_up_with_email_password
     FIREBASE_AVAILABLE = True

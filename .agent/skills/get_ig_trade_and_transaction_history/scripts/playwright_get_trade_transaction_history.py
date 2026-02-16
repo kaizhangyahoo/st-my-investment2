@@ -190,7 +190,7 @@ Examples:
     parser.add_argument(
         "--download-dir",
         type=str,
-        help="Optional directory to save downloads into (files will be saved directly into this dir)",
+        help="Optional directory to save downloads into (default is ~/Downloads/)",
     )
     args = parser.parse_args()
 
