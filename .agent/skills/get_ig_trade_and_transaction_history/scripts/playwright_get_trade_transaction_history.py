@@ -91,15 +91,19 @@ def run(
     context = browser.new_context()
     page = context.new_page()
     page.goto("https://www.ig.com/uk")
-    page.get_by_role("button", name="Accept").click()
+    if page.get_by_role("button", name="Accept").is_visible():
+        page.get_by_role("button", name="Accept").click()
     page.get_by_role("link", name="Log in").click()
+    if page.get_by_role("button", name="Accept").is_visible():
+        page.get_by_role("button", name="Accept").click()
     page.get_by_role("textbox", name="Email/username").fill(username)
     page.get_by_role("textbox", name="Email/username").press("Tab")
     page.get_by_role("textbox", name="Password").fill(passwd)
     page.get_by_role("button", name="Log in").click()
     # check if login was successful
+    page.wait_for_timeout(5000)  # Wait for potential redirects and page load
     try: 
-        expect(page.get_by_role("button", name="Open platform").first).to_be_visible(timeout=10000)
+        expect(page.get_by_role("button", name="Open platform").first).to_be_visible(timeout=5000)
     except Exception:
         print("Login failed or platform dashboard not loaded properly", file=sys.stderr)
         context.close()
