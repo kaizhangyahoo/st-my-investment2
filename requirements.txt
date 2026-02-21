@@ -2,7 +2,7 @@ pandas
 pandas-datareader
 plotly
 requests
-streamlit>=1.43.1
+streamlit>=1.54.0
 tqdm
 websocket-client
 lxml

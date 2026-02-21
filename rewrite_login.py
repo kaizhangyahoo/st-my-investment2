@@ -87,10 +87,10 @@ def log_user_login(provider: str, email: str = None, user_name: str = None, user
     """Log successful login to Firebase if available."""
     if FIREBASE_AVAILABLE:
         log_login_event(
-            user_email=email or getattr(st.experimental_user, 'email', 'unknown'),
-            user_name=user_name or getattr(st.experimental_user, 'name', None),
+            user_email=email or getattr(st.user, 'email', 'unknown'),
+            user_name=user_name or getattr(st.user, 'name', None),
             provider=provider,
-            user_id=user_id or getattr(st.experimental_user, 'sub', None),
+            user_id=user_id or getattr(st.user, 'sub', None),
         )
 
 
@@ -165,12 +165,12 @@ def handle_email_auth():
 def is_user_logged_in():
     """Check if user is logged in via any method."""
     # Check native Streamlit auth (Google OIDC)
-    # Note: st.experimental_user.is_logged_in only works on Streamlit Community Cloud
-    # On Cloud Run, we need to handle the case where this attribute doesn't exist
+    # Note: Streamlit native auth handles session state in st.user
+    # We check if st.user is truthy or has specific claims
     try:
-        if getattr(st.experimental_user, 'is_logged_in', False):
+        if "email" in getattr(st, 'user', {}) or getattr(getattr(st, 'user', None), 'is_logged_in', False):
             return True
-    except AttributeError:
+    except Exception:
         pass
     # Check email/password auth
     if "email_user" in st.session_state and st.session_state.email_user:
@@ -188,13 +188,13 @@ def get_current_user():
     """Get current user info from any auth method."""
     # Check native Streamlit auth (Google OIDC)
     try:
-        if getattr(st.experimental_user, 'is_logged_in', False):
+        if getattr(st, 'user', None) and ("email" in st.user or getattr(st.user, 'is_logged_in', False)):
             return {
-                "email": st.experimental_user.email,
-                "name": getattr(st.experimental_user, 'name', st.experimental_user.email),
+                "email": st.user.get("email", getattr(st.user, 'email', 'unknown')),
+                "name": st.user.get("name", getattr(st.user, 'name', 'unknown')),
                 "provider": "google"
             }
-    except AttributeError:
+    except Exception:
         pass
     if "email_user" in st.session_state and st.session_state.email_user:
         user = st.session_state.email_user
@@ -223,9 +223,9 @@ def get_current_user():
 def logout():
     """Logout from all auth methods."""
     try:
-        if getattr(st.experimental_user, 'is_logged_in', False):
+        if getattr(st, 'user', None):
             st.logout()
-    except AttributeError:
+    except Exception:
         pass
     st.session_state.pop("email_user", None)
     st.session_state.pop("github_user", None)
