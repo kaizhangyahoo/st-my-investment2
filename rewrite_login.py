@@ -62,7 +62,7 @@ def show_legal_page():
     """)
     
     st.markdown("")
-    if st.button("⬅️ Back to Login", use_container_width=True):
+    if st.button("⬅️ Back to Login", width="stretch"):
         st.query_params.clear()
         st.rerun()
     st.stop()
@@ -102,12 +102,12 @@ def handle_email_auth():
     # Toggle between sign in and sign up
     col_signin, col_signup = st.columns(2)
     with col_signin:
-        if st.button("Sign In", use_container_width=True, 
+        if st.button("Sign In", width="stretch", 
                      type="primary" if st.session_state.auth_mode == "signin" else "secondary"):
             st.session_state.auth_mode = "signin"
             st.rerun()
     with col_signup:
-        if st.button("Sign Up", use_container_width=True,
+        if st.button("Sign Up", width="stretch",
                      type="primary" if st.session_state.auth_mode == "signup" else "secondary"):
             st.session_state.auth_mode = "signup"
             st.rerun()
@@ -123,7 +123,7 @@ def handle_email_auth():
         else:
             submit_label = "Create Account"
         
-        submitted = st.form_submit_button(submit_label, use_container_width=True)
+        submitted = st.form_submit_button(submit_label, width="stretch")
         
         if submitted:
             if not email or not password:
@@ -331,7 +331,7 @@ if not is_user_logged_in():
         st.markdown("#### Continue with")
         
         # Google Sign In Button (native OIDC)
-        if st.button("🔵  Continue with Google", use_container_width=True, key="google_login"):
+        if st.button("🔵  Continue with Google", width="stretch", key="google_login"):
             st.login("google")
         
         st.markdown("")
@@ -358,7 +358,7 @@ if not is_user_logged_in():
                     redirect_uri=github_redirect,
                     scope="user:email",
                     key="github_oauth",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 
                 if result and "token" in result:
@@ -381,9 +381,9 @@ if not is_user_logged_in():
                         st.error(f"GitHub Auth Error: {str(e)}")
                         print(f"❌ GitHub Exception: {e}")
             else:
-                st.button("⚫  Continue with GitHub (Not Configured)", use_container_width=True, disabled=True)
+                st.button("⚫  Continue with GitHub (Not Configured)", width="stretch", disabled=True)
         else:
-            st.button("⚫  Continue with GitHub (Module Missing)", use_container_width=True, disabled=True)
+            st.button("⚫  Continue with GitHub (Module Missing)", width="stretch", disabled=True)
         
         st.markdown("")
         
@@ -417,7 +417,7 @@ if not is_user_logged_in():
                     redirect_uri=facebook_redirect,
                     scope="email,public_profile",
                     key="facebook_oauth",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 
                 if fb_result and "token" in fb_result:
@@ -442,9 +442,9 @@ if not is_user_logged_in():
                         st.error(f"Facebook Auth Error: {str(e)}")
                         print(f"❌ Facebook Exception: {e}")
             else:
-                st.button("🔵  Continue with Facebook (Not Configured)", use_container_width=True, disabled=True)
+                st.button("🔵  Continue with Facebook (Not Configured)", width="stretch", disabled=True)
         else:
-            st.button("🔵  Continue with Facebook (Module Missing)", use_container_width=True, disabled=True)
+            st.button("🔵  Continue with Facebook (Module Missing)", width="stretch", disabled=True)
         
         st.markdown("")
         st.markdown("""
@@ -494,7 +494,7 @@ else:
         st.caption(f"📧 {user['email']}")
         st.caption(f"🔐 Signed in via {user['provider'].title()}")
         st.markdown("---")
-        if st.button("🚪 Logout", use_container_width=True):
+        if st.button("🚪 Logout", width="stretch"):
             logout()
     
     # Execute the main dashboard

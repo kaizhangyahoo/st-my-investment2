@@ -430,7 +430,7 @@ if files_to_process:
                 standout[idx] = 0.5
             current_GBP_rate = {'GBPUSD=X': GBPUSD.iloc[-1], 'GBPEUR=X': GBPEUR.iloc[-1]}
             fig = ppw.plot_portfolio_weights(df_current_positions, standout, current_GBP_rate)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 
             # ============ PORTFOLIO VALUE OVER TIME WIDGET ============
@@ -458,7 +458,7 @@ if files_to_process:
             
 
             fig_portfolio = ppw.portfolio_value_over_time(df_portfolio_history, account_id)
-            st.plotly_chart(fig_portfolio, use_container_width=True)
+            st.plotly_chart(fig_portfolio, width="stretch")
 
             # Date Range Slider
             # today_date = datetime.now().date()
@@ -480,17 +480,17 @@ if files_to_process:
             selected_date = None
             st.write("Select a time period to view portfolio value on that date:")
             left1, left2, middle1, middle2, right1, right2 = st.columns(6)
-            if left1.button("1y", use_container_width=True):
+            if left1.button("1y", width="stretch"):
                 selected_date = calculate_past_date("1y")
-            if left2.button("6m", use_container_width=True):
+            if left2.button("6m", width="stretch"):
                 selected_date = calculate_past_date("6m")
-            if middle1.button("3m", use_container_width=True):
+            if middle1.button("3m", width="stretch"):
                 selected_date = calculate_past_date("3m")
-            if middle2.button("1m", use_container_width=True):
+            if middle2.button("1m", width="stretch"):
                 selected_date = calculate_past_date("1m")
-            if right1.button("1w", use_container_width=True):
+            if right1.button("1w", width="stretch"):
                 selected_date = calculate_past_date("1w")
-            if right2.button("1d", use_container_width=True):
+            if right2.button("1d", width="stretch"):
                 selected_date = calculate_past_date("1d")
             
             if selected_date:
@@ -522,4 +522,4 @@ if files_to_process:
                 net_cashflow[i] = df_transactions[df_transactions['Summary'] == i]['PL Amount'].sum()
             st.write(net_cashflow)
             fig = ppw.plot_cashflow(net_cashflow)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
