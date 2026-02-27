@@ -1,0 +1,34 @@
+# Use official Playwright Python image which supports ARM64 (for RPI4)
+FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements from root to current dir
+COPY requirements.txt .
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Playwright dependencies are already in the base image, 
+# but we might need to ensure the browsers are installed/accessible.
+# The base image usually has them.
+# We skip 'playwright install' if they are already there, 
+# but 'playwright install chromium' is safe.
+RUN playwright install chromium
+
+# Copy the specific script and any other needed files in /ig
+COPY ig/ ./ig/
+
+# Copy other necessary files from root if needed (client files, etc.)
+COPY alpaca_client.py .
+COPY company_name_to_ticker.json .
+
+# Default command - can be overridden in docker-compose or docker run
+# We use a dummy entrypoint or just the script with some defaults
+ENTRYPOINT ["python", "ig/ig.sequentially.news.download.py"]

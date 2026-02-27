@@ -1,0 +1,10 @@
+**/*.pyc
+**/__pycache__
+.venv
+.git
+.DS_Store
+.env
+.pytest_cache
+terraform
+todo
+news_output

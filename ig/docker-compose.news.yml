@@ -1,0 +1,19 @@
+services:
+  ig-news:
+    build:
+      context: ..
+      dockerfile: ig/Dockerfile.news
+    container_name: ig-news-scraper
+    environment:
+      - IG_USERNAME=${IG_USERNAME:-shanghailondon2000}
+      - IG_PASSWORD=${IG_PASSWORD}
+    volumes:
+      - ./news_output:/app/news_output
+    # Override command to use mounted volume and passed credentials
+    command: >
+      --headless
+      --username ${IG_USERNAME:-shanghailondon2000}
+      --password ${IG_PASSWORD}
+      --output /app/news_output
+      --max-news-items 5
+    restart: "no"

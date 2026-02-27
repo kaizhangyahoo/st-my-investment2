@@ -1,0 +1,8 @@
+.agent/skills/users-login-record-firebase/scripts/firebase_config.json
+**/__pycache__/*
+.venv/*
+terraform/.terraform/*
+terraform/.terraform.lock.hcl
+ig/ig_login_test.py
+ig/ig_positions.py
+~/
