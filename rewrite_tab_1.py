@@ -482,3 +482,82 @@ if uploaded_file is not None:
             df_trading212_history = pd.read_csv(f)
             print(df_trading212_history.head())
             print(df_trading212_history.tail())
+
+            # ============ TRADING 212 PORTFOLIO POSITIONS & CURRENT VALUE ============
+            st.subheader("Trading 212 Portfolio Positions")
+
+            # Filter to trade actions only (buy/sell)
+            trade_actions = ['Market buy', 'Market sell', 'Limit buy', 'Limit sell']
+            df_t212_trades = df_trading212_history[df_trading212_history['Action'].isin(trade_actions)].copy()
+
+            if not df_t212_trades.empty:
+                # Assign signed quantity: buys are positive, sells are negative
+                df_t212_trades['Signed Shares'] = df_t212_trades['No. of shares']
+                sell_mask = df_t212_trades['Action'].isin(['Market sell', 'Limit sell'])
+                df_t212_trades.loc[sell_mask, 'Signed Shares'] = -df_t212_trades.loc[sell_mask, 'No. of shares']
+
+                # Calculate current positions by grouping on Ticker
+                df_t212_positions = df_t212_trades.groupby('Ticker').agg({
+                    'Signed Shares': 'sum',
+                    'Name': 'last',
+                    'Total': 'sum',
+                    'Currency (Price / share)': 'last'
+                }).rename(columns={
+                    'Signed Shares': 'Quantity',
+                    'Total': 'Total Cost',
+                    'Currency (Price / share)': 'Currency'
+                })
+
+                # Keep only positions with non-zero quantity (still held)
+                df_t212_positions = df_t212_positions[df_t212_positions['Quantity'].abs() > 1e-9]
+
+                if not df_t212_positions.empty:
+                    # Separate tickers by market for price fetching
+                    uk_tickers = [t for t in df_t212_positions.index if t.endswith('.L') or t.endswith('.DE')]
+                    us_tickers = [t for t in df_t212_positions.index if t not in uk_tickers]
+
+                    t212_current_prices = {}
+                    if us_tickers:
+                        t212_current_prices.update(getEODpriceUSA(us_tickers))
+                    if uk_tickers:
+                        t212_current_prices.update(getEODpriceUK(uk_tickers))
+
+                    df_t212_positions['Current Price'] = df_t212_positions.index.map(t212_current_prices)
+                    df_t212_positions['Current Price'] = pd.to_numeric(df_t212_positions['Current Price'], errors='coerce')
+                    df_t212_positions['Market Value'] = df_t212_positions['Quantity'] * df_t212_positions['Current Price']
+
+                    # Convert market value to GBP
+                    # Fetch FX rates if not already available
+                    t212_min_date = pd.to_datetime(df_t212_trades['Time']).min().strftime('%Y-%m-%d')
+                    t212_fx = get_historical_fx(t212_min_date)
+                    t212_GBPUSD = t212_fx['GBPUSD=X']
+                    t212_GBPEUR = t212_fx['GBPEUR=X']
+
+                    def t212_convert_to_gbp(row):
+                        if row['Currency'] == 'GBP' or row.name.endswith('.L'):
+                            return row['Market Value']
+                        elif row['Currency'] == 'EUR' or row.name.endswith('.DE'):
+                            return row['Market Value'] / t212_GBPEUR.iloc[-1]
+                        else:  # USD
+                            return row['Market Value'] / t212_GBPUSD.iloc[-1]
+
+                    df_t212_positions['Market Value GBP'] = df_t212_positions.apply(t212_convert_to_gbp, axis=1)
+                    df_t212_positions['PandL GBP'] = df_t212_positions['Market Value GBP'] - df_t212_positions['Total Cost']
+
+                    t212_total_market_value_gbp = df_t212_positions['Market Value GBP'].sum()
+                    t212_total_cost = df_t212_positions['Total Cost'].sum()
+                    t212_total_pandl = t212_total_market_value_gbp - t212_total_cost
+
+                    st.metric(label="Trading 212 Total Portfolio Value (GBP)", value=f"£{t212_total_market_value_gbp:,.2f}", delta=f"£{t212_total_pandl:,.2f}")
+
+                    df_t212_display = df_t212_positions[['Name', 'Quantity', 'Current Price', 'Currency', 'Market Value GBP', 'PandL GBP']]
+                    st.dataframe(df_t212_display.style.format({
+                        'Quantity': '{:,.4f}',
+                        'Current Price': '{:,.2f}',
+                        'Market Value GBP': '£{:,.2f}',
+                        'PandL GBP': '£{:,.2f}'
+                    }).map(color_green_red, subset=['PandL GBP']), height=400)
+                else:
+                    st.info("No open positions found in Trading 212 history.")
+            else:
+                st.info("No trade actions found in the uploaded Trading 212 file.")
