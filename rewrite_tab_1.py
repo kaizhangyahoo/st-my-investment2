@@ -477,3 +477,8 @@ if uploaded_file is not None:
             st.write(net_cashflow)
             fig = ppw.plot_cashflow(net_cashflow)
             st.plotly_chart(fig, width="stretch")
+
+        elif f.name.startswith("from") and f.name.endswith(".csv"):
+            df_trading212_history = pd.read_csv(f)
+            print(df_trading212_history.head())
+            print(df_trading212_history.tail())
