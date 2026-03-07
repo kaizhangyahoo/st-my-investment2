@@ -5,7 +5,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from rewrite_ticker_resolution import use_sec_site
-from getEODprice import getEODpriceUK, getEODpriceUSA
+from getEODprice import getEODpriceUK, getEODpriceUSA, getEODpriceISIN
 import rewrite_plot_portfolio_weights as ppw # TODO: rename to make it more intuitive
 from market_data_api import OHLC_YahooFinance, HistoricalMarketData
 
@@ -501,7 +501,8 @@ if uploaded_file is not None:
                     'Signed Shares': 'sum',
                     'Name': 'last',
                     'Total': 'sum',
-                    'Currency (Price / share)': 'last'
+                    'Currency (Price / share)': 'last',
+                    'ISIN': 'last'
                 }).rename(columns={
                     'Signed Shares': 'Quantity',
                     'Total': 'Total Cost',
@@ -512,18 +513,11 @@ if uploaded_file is not None:
                 df_t212_positions = df_t212_positions[df_t212_positions['Quantity'].abs() > 1e-9]
 
                 if not df_t212_positions.empty:
-                    # Separate tickers by market for price fetching
-                    uk_tickers = [t for t in df_t212_positions.index if t.endswith('.L') or t.endswith('.DE')]
-                    us_tickers = [t for t in df_t212_positions.index if t not in uk_tickers]
+                    print(df_t212_positions['ISIN'])
+                    t212_current_prices = getEODpriceISIN(df_t212_positions['ISIN'].tolist())
 
-                    t212_current_prices = {}
-                    if us_tickers:
-                        t212_current_prices.update(getEODpriceUSA(us_tickers))
-                    if uk_tickers:
-                        t212_current_prices.update(getEODpriceUK(uk_tickers))
-
-                    df_t212_positions['Current Price'] = df_t212_positions.index.map(t212_current_prices)
-                    df_t212_positions['Current Price'] = pd.to_numeric(df_t212_positions['Current Price'], errors='coerce')
+                    # add current price to df_t212_positions base on isin
+                    df_t212_positions['Current Price'] = df_t212_positions['ISIN'].map(t212_current_prices)
                     df_t212_positions['Market Value'] = df_t212_positions['Quantity'] * df_t212_positions['Current Price']
 
                     # Convert market value to GBP
