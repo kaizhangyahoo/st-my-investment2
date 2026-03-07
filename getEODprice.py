@@ -40,6 +40,13 @@ def less_than_32_symbols(symbols_in_8s, k) -> dict:
 
 
 def getEODpriceUSA(L) -> dict:
+    # try:
+    #     # Expecting a list of keys for 12data from st.secrets
+    #     # We can fallback to the encoded ones if needed, but better to use secrets
+    #     k_all = st.secrets["api_keys"]
+    #     k = [k_all.get("12Data")] # 12Data key from secrets
+    # except Exception:
+    #     # Fallback to encoded key if secrets not available
     g = b'z4zZpKqmm9jAubi2gLF8d3ja2Kqgz56eyJhpxarIo6msqIyeen6NhYOBf3ikr6nY0aGenZtsmZqtx6uspabGo4qNtomEgW9xYqDarKOmm56XanGTpJunqainnaOTvbiHfoR6qnneqKXU05GThF1pw6rKqtasp5umjIqItrB_gad1qaylpNDNn8iaa8OolZrR'
     k = ast.literal_eval(enc.decode(enc.cccccccz, g))
     
@@ -77,12 +84,55 @@ def getEODpriceUK(L) -> dict:
 
     return uk_close_price
 
+import streamlit as st
+
+def getEODpriceISIN(isin_list : list) -> dict:
+    try:
+        k = st.secrets["api_keys"]
+    except Exception:
+        # If st.secrets is not available (e.g. running as script)
+        # the function will likely fail or return early
+        return {}
+
+    eod_isin_price = {}
+    for i in isin_list:
+        url = f"https://eodhd.com/api/id-mapping?filter[isin]={i}&api_token={k.get('eodhd')}"
+        print(url)
+        response = requests.get(url)
+        print(response.text, response.status_code)
+        try:
+            response = requests.get(url)
+            if response.status_code == 200:
+                r = response.json()
+                if r.get('data'):
+                    ticker = r['data'][0]['symbol']
+                    
+                    price_url = f"https://eodhd.com/api/real-time/{ticker}?api_token={k.get('eodhd')}&fmt=json"
+                    price_response = requests.get(price_url)
+                    if price_response.status_code == 200:
+                        eod_isin_price[i] = price_response.json().get('close')
+                else:
+                    eod_isin_price[i] = None
+            else:
+                eod_isin_price[i] = None
+        except Exception:
+            eod_isin_price[i] = None
+    
+    return eod_isin_price
+
+
+            
+
+        
+
+
 
 def main():
-    L1 = ['PAY.L', 'SDR.L', 'AFX.DE']
-    print(getEODpriceUK(L1))
-    # print(getEODpriceUSA(["MSCI", "FDS"]))
-
+    # L1 = ['PAY.L', 'SDR.L', 'AFX.DE']
+    # print(getEODpriceUK(L1))
+    isin_list = ['IE00BLRPPV00']
+    print(getEODpriceISIN(isin_list))
+    
 
 if __name__ == "__main__":
     main()
