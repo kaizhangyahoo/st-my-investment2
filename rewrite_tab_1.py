@@ -513,11 +513,33 @@ if uploaded_file is not None:
                 df_t212_positions = df_t212_positions[df_t212_positions['Quantity'].abs() > 1e-9]
 
                 if not df_t212_positions.empty:
-                    print(df_t212_positions['ISIN'])
-                    t212_current_prices = getEODpriceISIN(df_t212_positions['ISIN'].tolist())
+                    us_tickers = df_t212_positions[df_t212_positions['Currency'] == 'USD'].index.tolist()
+                    uk_tickers = df_t212_positions[df_t212_positions['Currency'] == 'GBX'].index.tolist()
+                    eu_tickers = df_t212_positions[df_t212_positions['Currency'] == 'EUR'].index.tolist()
 
-                    # add current price to df_t212_positions base on isin
-                    df_t212_positions['Current Price'] = df_t212_positions['ISIN'].map(t212_current_prices)
+                    uk_tickers = [ticker+'.L' for ticker in uk_tickers]
+
+                    us_prices = getEODpriceUSA(us_tickers)
+                    uk_prices = getEODpriceUK(uk_tickers)
+                    # eu_prices = getEODpriceEU(eu_tickers)
+
+                    # Fallback: if getEODpriceUSA failed for any US ticker, retry via getEODpriceISIN
+                    failed_us_tickers = [t for t in us_tickers if us_prices.get(t) is None]
+                    if failed_us_tickers:
+                        print(f"getEODpriceUSA failed for {failed_us_tickers}, retrying with getEODpriceISIN...")
+                        failed_isins = df_t212_positions.loc[failed_us_tickers, 'ISIN'].tolist()
+                        fallback_prices = getEODpriceISIN(failed_isins)
+                        # Map ISIN-based prices back to ticker
+                        for ticker in failed_us_tickers:
+                            isin = df_t212_positions.loc[ticker, 'ISIN']
+                            if fallback_prices.get(isin) is not None:
+                                us_prices[ticker] = fallback_prices[isin]
+
+                    # Merge all prices by ticker (strip .L suffix from uk_prices keys to match index)
+                    uk_prices_remapped = {k.replace('.L', ''): v for k, v in uk_prices.items()}
+                    # all_prices = {**us_prices, **uk_prices_remapped, **eu_prices}
+                    all_prices = {**us_prices, **uk_prices_remapped}
+                    df_t212_positions['Current Price'] = pd.to_numeric(df_t212_positions.index.map(all_prices), errors='coerce')
                     df_t212_positions['Market Value'] = df_t212_positions['Quantity'] * df_t212_positions['Current Price']
 
                     # Convert market value to GBP
@@ -528,7 +550,7 @@ if uploaded_file is not None:
                     t212_GBPEUR = t212_fx['GBPEUR=X']
 
                     def t212_convert_to_gbp(row):
-                        if row['Currency'] == 'GBP' or row.name.endswith('.L'):
+                        if row['Currency'] == 'GBX' or row.name.endswith('.L'):
                             return row['Market Value']
                         elif row['Currency'] == 'EUR' or row.name.endswith('.DE'):
                             return row['Market Value'] / t212_GBPEUR.iloc[-1]
