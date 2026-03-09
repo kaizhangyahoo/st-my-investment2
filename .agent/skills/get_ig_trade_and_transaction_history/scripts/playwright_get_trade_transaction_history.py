@@ -87,6 +87,7 @@ def run(
     download_dir: Optional[str] = None,
     start_date: str = "01/01/2018",
 ):
+    downloaded_files = []
     browser = playwright.chromium.launch(headless=True)
     context = browser.new_context()
     page = context.new_page()
@@ -132,10 +133,9 @@ def run(
                 download_path = os.path.expanduser(f"~/Downloads/{download.suggested_filename}")
             download.save_as(download_path)
             print(f"Trade history downloaded to: {download_path}")
-            saved = download_path
+            downloaded_files.append(download_path)
         except Exception as exc:
             print(f"Trade history download failed: {exc}", file=sys.stderr)
-            saved = None
     
     else:
         print("Skipping transaction history download")
@@ -157,16 +157,25 @@ def run(
             download1_path = os.path.expanduser(f"~/Downloads/{download1.suggested_filename}")
         download1.save_as(download1_path)
         print(f"Transaction history downloaded to: {download1_path}")
-        saved1 = download1_path
+        downloaded_files.append(download1_path)
     except Exception as exc:
         print(f"Transaction history download failed: {exc}", file=sys.stderr)
-        saved1 = None
     # ---------------------
     context.close()
     browser.close()
+    return downloaded_files
 
 
 def main():
+    # Load .env file automatically if it exists
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                if '=' in line and not line.strip().startswith('#'):
+                    key, val = line.strip().split('=', 1)
+                    os.environ[key.strip()] = val.strip().strip('"').strip("'")
+
     parser = argparse.ArgumentParser(
         description="Download IG trade history and transactions",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -198,10 +207,10 @@ Examples:
     )
     args = parser.parse_args()
 
-    username = args.username
+    username = args.username or os.environ.get("IG_USERNAME")
     if not username:
         username = input("Enter IG login username: ")
-    password = args.password
+    password = args.password or os.environ.get("IG_PASSWORD")
     if not password:
         password = getpass.getpass("Enter IG login password: ")
     if not password:
@@ -215,7 +224,12 @@ Examples:
             download_dir_value = os.path.expanduser(args.download_dir)
             # ensure directory exists
             os.makedirs(download_dir_value, exist_ok=True)
-        run(playwright, username, password, download_both=not args.skip_transactions, download_dir=download_dir_value)
+        saved_files = run(playwright, username, password, download_both=not args.skip_transactions, download_dir=download_dir_value)
+
+        if saved_files:
+            print(f"\nAll files saved successfully:")
+            for f in saved_files:
+                print(f" - {f}")
 
 
 if __name__ == "__main__":
