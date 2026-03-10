@@ -6,6 +6,7 @@ import requests
 import numpy as np
 from datetime import datetime
 from market_data_api import OHLC_YahooFinance
+import streamlit as st
 
 def chunks(l, n):
     ll = list(l)
@@ -84,14 +85,16 @@ def getEODpriceUK(L) -> dict:
 
     return uk_close_price
 
-import streamlit as st
+
 
 def getEODpriceISIN(isin_list : list) -> dict:
     try:
         k = st.secrets["api_keys"]
-    except Exception:
+        print(k)
+    except Exception as e:
         # If st.secrets is not available (e.g. running as script)
         # the function will likely fail or return early
+        print(e)
         return {}
 
     eod_isin_price = {}
@@ -115,7 +118,8 @@ def getEODpriceISIN(isin_list : list) -> dict:
                     eod_isin_price[i] = None
             else:
                 eod_isin_price[i] = None
-        except Exception:
+        except Exception as e:
+            print(e)
             eod_isin_price[i] = None
     
     return eod_isin_price
@@ -128,10 +132,10 @@ def getEODpriceISIN(isin_list : list) -> dict:
 
 
 def main():
-    # L1 = ['PAY.L', 'SDR.L', 'AFX.DE']
-    # print(getEODpriceUK(L1))
-    isin_list = ['IE00BLRPPV00']
-    print(getEODpriceISIN(isin_list))
+    L1 = ['CNX1.L']
+    print(getEODpriceUK(L1))
+    # isin_list = ['IE00BLRPPV00']
+    # print(getEODpriceISIN(isin_list))
     
 
 if __name__ == "__main__":

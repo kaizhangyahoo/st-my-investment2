@@ -215,6 +215,14 @@ def get_portfolio_value_history(
     
     return account_cache
 
+def t212_convert_to_gbp(row):
+    if row['Currency'] == 'GBX' or row.name.endswith('.L'):
+        return row['Market Value']
+    elif row['Currency'] == 'EUR' or row.name.endswith('.DE'):
+        return row['Market Value'] / t212_GBPEUR.iloc[-1]
+    else:  # USD
+        return row['Market Value'] / t212_GBPUSD.iloc[-1]
+
 
 st.title("Portfolio Management Dashboard and Analytics")
 
@@ -491,6 +499,10 @@ if uploaded_file is not None:
             df_t212_trades = df_trading212_history[df_trading212_history['Action'].isin(trade_actions)].copy()
 
             if not df_t212_trades.empty:
+                # calculate total invested cash & interest from unfiltered history
+                total_deposit = df_trading212_history.loc[df_trading212_history['Action'] == 'Deposit', 'Total'].sum()
+                interest = df_trading212_history.loc[df_trading212_history['Action'] == 'Interest on cash', 'Total'].sum()
+
                 # Assign signed quantity: buys are positive, sells are negative
                 df_t212_trades['Signed Shares'] = df_t212_trades['No. of shares']
                 sell_mask = df_t212_trades['Action'].isin(['Market sell', 'Limit sell'])
@@ -549,13 +561,6 @@ if uploaded_file is not None:
                     t212_GBPUSD = t212_fx['GBPUSD=X']
                     t212_GBPEUR = t212_fx['GBPEUR=X']
 
-                    def t212_convert_to_gbp(row):
-                        if row['Currency'] == 'GBX' or row.name.endswith('.L'):
-                            return row['Market Value']
-                        elif row['Currency'] == 'EUR' or row.name.endswith('.DE'):
-                            return row['Market Value'] / t212_GBPEUR.iloc[-1]
-                        else:  # USD
-                            return row['Market Value'] / t212_GBPUSD.iloc[-1]
 
                     df_t212_positions['Market Value GBP'] = df_t212_positions.apply(t212_convert_to_gbp, axis=1)
                     df_t212_positions['PandL GBP'] = df_t212_positions['Market Value GBP'] - df_t212_positions['Total Cost']
@@ -564,8 +569,9 @@ if uploaded_file is not None:
                     t212_total_cost = df_t212_positions['Total Cost'].sum()
                     t212_total_pandl = t212_total_market_value_gbp - t212_total_cost
 
-                    st.metric(label="Trading 212 Total Portfolio Value (GBP)", value=f"£{t212_total_market_value_gbp:,.2f}", delta=f"£{t212_total_pandl:,.2f}")
-
+                    col_val, col_cash = st.columns(2)
+                    col_val.metric(label="Trading 212 Total Portfolio Value", value=f"£{t212_total_market_value_gbp:,.2f}", delta=f"£{t212_total_pandl:,.2f}")
+                    col_cash.metric(label="Of which cash investment (delta interest earned)", value=f"£{total_deposit}", delta=f"£{interest}")
                     df_t212_display = df_t212_positions[['Name', 'Quantity', 'Current Price', 'Currency', 'Market Value GBP', 'PandL GBP']]
                     st.dataframe(df_t212_display.style.format({
                         'Quantity': '{:,.4f}',
@@ -575,5 +581,17 @@ if uploaded_file is not None:
                     }).map(color_green_red, subset=['PandL GBP']), height=400)
                 else:
                     st.info("No open positions found in Trading 212 history.")
+
+                # ============ TRADING 212 SINGLE INSTRUMENT TRADE HISTORY ============
+                st.subheader("Trading 212 – Instrument Trade History")
+                t212_unique = df_t212_trades[['Ticker', 'Name']].drop_duplicates().sort_values('Ticker')
+                t212_options = [f"{row['Ticker']}  —  {row['Name']}" for _, row in t212_unique.iterrows()]
+                selected_t212 = st.selectbox("Select an instrument to view trades", options=t212_options, key="t212_instrument_select")
+                if selected_t212:
+                    selected_t212_ticker = selected_t212.split("  —  ")[0]
+                    df_t212_selected = df_t212_trades[df_t212_trades['Ticker'] == selected_t212_ticker].sort_values('Time', ascending=False)
+                    st.table(df_t212_selected[['Time', 'Action', 'Name', 'Ticker', 'No. of shares', 'Price / share', 'Currency (Price / share)', 'Total']])
             else:
                 st.info("No trade actions found in the uploaded Trading 212 file.")
+            
+            
