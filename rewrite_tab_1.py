@@ -506,6 +506,8 @@ if uploaded_file is not None:
             fig = ppw.plot_cashflow(net_cashflow)
             st.plotly_chart(fig, width="stretch")
 
+
+        # ============ TRADING 212 analyze manually downloaded history file ============
         elif f.name.startswith("from") and f.name.endswith(".csv"):
             df_trading212_history = pd.read_csv(f)
             print(df_trading212_history.head())
