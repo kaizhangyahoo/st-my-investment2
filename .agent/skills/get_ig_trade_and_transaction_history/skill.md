@@ -4,7 +4,7 @@ Short description
 - A small CLI-like Python script that uses Playwright to log into an IG account, navigate the "History" area in the web platform, and download two types of CSV/history files (trade history and transactions) into the user's `~/Downloads` folder.
 
 Prerequisites
-- Python 3.8+
+- Python
 - Playwright Python package installed: `pip install playwright`
 - Playwright browsers installed: `playwright install`
 - A valid IG account username configured in the script (see `USERNAME` constant) and the account password supplied at runtime.
@@ -19,6 +19,7 @@ Behavior summary
 - After successful login it opens the platform, navigates to History → View full history in My IG, sets a custom date range, and downloads the Trade History CSV.
 - It then navigates to the Transactions tab and performs up to two transaction downloads (matching the original flows).
 - Both downloads are saved into `~/Downloads` and the saved file paths are printed at the end.
+- **Sync to RPI**: A separate bash script `scripts/sync_to_rpi.sh` is provided for reference to transfer the latest history files to your Raspberry Pi, using the `SYNC_DESTINATION` configured in your `.env`.
 
 CLI / Usage
 - Run and follow the password prompt:
@@ -39,6 +40,20 @@ python scripts/playwright_get_trade_transaction_history.py --password mypassword
 python scripts/playwright_get_trade_transaction_history.py --skip-transactions
 ```
 
+- **Sync to Raspberry Pi**:
+After downloading, you can sync the latest files using the helper script:
+
+```bash
+bash scripts/sync_to_rpi.sh
+```
+
+- **Sync from a custom directory**:
+If you downloaded the files to a custom directory using the python script, pass the same path to the sync script:
+
+```bash
+bash scripts/sync_to_rpi.sh --download-dir /path/to/my/downloads
+```
+
 Options
 - `-p, --password`: IG account password (will prompt if not provided).
 - `--skip-transactions`: Only run the trade-history flow and skip the transactions flow.
@@ -47,7 +62,9 @@ Outputs
 - Files saved to the user Downloads folder with the original suggested filenames from the IG website. The script prints the saved paths when downloads complete.
 
 Configuration notes
-- Username is stored in the script as a `USERNAME` constant. Change this to use a different account, or modify the script to read a username from an environment variable or arguments.
+- A `.env` file can be placed in `scripts/.env` with `IG_USERNAME` and `IG_PASSWORD`.
+- `SYNC_DESTINATION` (e.g. `kaizhang@192.168.1.201:./Downloads`) can also be added as a hint for the agent to use when performing a manual sync.
+- Username is stored in the script as a fallback, but the `.env` value will override. Change this to use a different account, or modify the script to read a username from an environment variable or arguments.
 
 Error handling & common issues
 - Login failures: the script contains checks for common login failure messages (incorrect username/password and "attempts left" messages). If login fails the script will print an error and exit.

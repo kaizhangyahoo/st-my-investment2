@@ -3,11 +3,13 @@ import streamlit as st
 import numpy as np
 import json
 import os
+import time
 from datetime import datetime, timedelta
 from rewrite_ticker_resolution import use_sec_site
-from getEODprice import getEODpriceUK, getEODpriceUSA
+from getEODprice import getEODpriceUK, getEODpriceUSA, getEODpriceISIN
 import rewrite_plot_portfolio_weights as ppw # TODO: rename to make it more intuitive
 from market_data_api import OHLC_YahooFinance, HistoricalMarketData
+from trading212_api import Trading212API
 
 
 @st.cache_data
@@ -214,6 +216,14 @@ def get_portfolio_value_history(
         print(f"Saved portfolio values to {cache_path}")
     
     return account_cache
+
+def t212_convert_to_gbp(row):
+    if row['Currency'] == 'GBX' or row.name.endswith('.L'):
+        return row['Market Value']
+    elif row['Currency'] == 'EUR' or row.name.endswith('.DE'):
+        return row['Market Value'] / t212_GBPEUR.iloc[-1]
+    else:  # USD
+        return row['Market Value'] / t212_GBPUSD.iloc[-1]
 
 
 st.title("Portfolio Management Dashboard and Analytics")
@@ -478,7 +488,389 @@ if uploaded_file is not None:
             fig = ppw.plot_cashflow(net_cashflow)
             st.plotly_chart(fig, width="stretch")
 
+
+
+        elif f.name.startswith("Transaction") and f.name.endswith(".csv"):
+            df_transactions = pd.read_csv(f)
+            df_transactions['Summary'] = df_transactions['Summary'].fillna('Cash Interest - Platform Cost')
+            type_dict = {'TextDate': 'datetime64[s]', 'PL Amount': 'float', 'Summary': 'category', 'Transaction type': 'category', 'Cash transaction': 'boolean', 'MarketName': 'string'}
+            df_transactions['PL Amount'] = df_transactions['PL Amount'].str.replace(',','')
+            df_transactions = df_transactions.astype(type_dict)
+            df_transactions.loc[df_transactions['MarketName'] == 'Bank Deposit', 'Summary'] = 'Cash In'
+            df_cashIn = df_transactions[df_transactions['Summary']=='Cash In' ]
+            st.metric(label="Total Cash Invested", value=f"£{df_cashIn['PL Amount'].sum():,.2f}")
+            net_cashflow = {}
+            for i in df_transactions['Summary'].unique():
+                net_cashflow[i] = df_transactions[df_transactions['Summary'] == i]['PL Amount'].sum()
+            st.write(net_cashflow)
+            fig = ppw.plot_cashflow(net_cashflow)
+            st.plotly_chart(fig, width="stretch")
+
+
+        # ============ TRADING 212 analyze manually downloaded history file ============
         elif f.name.startswith("from") and f.name.endswith(".csv"):
             df_trading212_history = pd.read_csv(f)
             print(df_trading212_history.head())
             print(df_trading212_history.tail())
+
+            # ============ TRADING 212 PORTFOLIO POSITIONS & CURRENT VALUE ============
+            st.subheader("Trading 212 Portfolio Positions")
+
+            # Filter to trade actions only (buy/sell)
+            trade_actions = ['Market buy', 'Market sell', 'Limit buy', 'Limit sell']
+            df_t212_trades = df_trading212_history[df_trading212_history['Action'].isin(trade_actions)].copy()
+
+            if not df_t212_trades.empty:
+                # calculate total invested cash & interest from unfiltered history
+                total_deposit = df_trading212_history.loc[df_trading212_history['Action'] == 'Deposit', 'Total'].sum()
+                interest = df_trading212_history.loc[df_trading212_history['Action'] == 'Interest on cash', 'Total'].sum()
+
+                # Assign signed quantity: buys are positive, sells are negative
+                df_t212_trades['Signed Shares'] = df_t212_trades['No. of shares']
+                sell_mask = df_t212_trades['Action'].isin(['Market sell', 'Limit sell'])
+                df_t212_trades.loc[sell_mask, 'Signed Shares'] = -df_t212_trades.loc[sell_mask, 'No. of shares']
+
+                # Calculate current positions by grouping on Ticker
+                df_t212_positions = df_t212_trades.groupby('Ticker').agg({
+                    'Signed Shares': 'sum',
+                    'Name': 'last',
+                    'Total': 'sum',
+                    'Currency (Price / share)': 'last',
+                    'ISIN': 'last'
+                }).rename(columns={
+                    'Signed Shares': 'Quantity',
+                    'Total': 'Total Cost',
+                    'Currency (Price / share)': 'Currency'
+                })
+
+                # Keep only positions with non-zero quantity (still held)
+                df_t212_positions = df_t212_positions[df_t212_positions['Quantity'].abs() > 1e-9]
+
+                if not df_t212_positions.empty:
+                    us_tickers = df_t212_positions[df_t212_positions['Currency'] == 'USD'].index.tolist()
+                    uk_tickers = df_t212_positions[df_t212_positions['Currency'] == 'GBX'].index.tolist()
+                    eu_tickers = df_t212_positions[df_t212_positions['Currency'] == 'EUR'].index.tolist()
+
+                    uk_tickers = [ticker+'.L' for ticker in uk_tickers]
+
+                    us_prices = getEODpriceUSA(us_tickers)
+                    uk_prices = getEODpriceUK(uk_tickers)
+                    # eu_prices = getEODpriceEU(eu_tickers)
+
+                    # Fallback: if getEODpriceUSA failed for any US ticker, retry via getEODpriceISIN
+                    failed_us_tickers = [t for t in us_tickers if us_prices.get(t) is None]
+                    if failed_us_tickers:
+                        print(f"getEODpriceUSA failed for {failed_us_tickers}, retrying with getEODpriceISIN...")
+                        failed_isins = df_t212_positions.loc[failed_us_tickers, 'ISIN'].tolist()
+                        fallback_prices = getEODpriceISIN(failed_isins)
+                        # Map ISIN-based prices back to ticker
+                        for ticker in failed_us_tickers:
+                            isin = df_t212_positions.loc[ticker, 'ISIN']
+                            if fallback_prices.get(isin) is not None:
+                                us_prices[ticker] = fallback_prices[isin]
+
+                    # Merge all prices by ticker (strip .L suffix from uk_prices keys to match index)
+                    uk_prices_remapped = {k.replace('.L', ''): v for k, v in uk_prices.items()}
+                    # all_prices = {**us_prices, **uk_prices_remapped, **eu_prices}
+                    all_prices = {**us_prices, **uk_prices_remapped}
+                    df_t212_positions['Current Price'] = pd.to_numeric(df_t212_positions.index.map(all_prices), errors='coerce')
+                    df_t212_positions['Market Value'] = df_t212_positions['Quantity'] * df_t212_positions['Current Price']
+
+                    # Convert market value to GBP
+                    # Fetch FX rates if not already available
+                    t212_min_date = pd.to_datetime(df_t212_trades['Time']).min().strftime('%Y-%m-%d')
+                    t212_fx = get_historical_fx(t212_min_date)
+                    t212_GBPUSD = t212_fx['GBPUSD=X']
+                    t212_GBPEUR = t212_fx['GBPEUR=X']
+
+
+                    df_t212_positions['Market Value GBP'] = df_t212_positions.apply(t212_convert_to_gbp, axis=1)
+                    df_t212_positions['PandL GBP'] = df_t212_positions['Market Value GBP'] - df_t212_positions['Total Cost']
+
+                    t212_total_market_value_gbp = df_t212_positions['Market Value GBP'].sum()
+                    t212_total_cost = df_t212_positions['Total Cost'].sum()
+                    t212_total_pandl = t212_total_market_value_gbp - t212_total_cost
+
+                    col_val, col_cash = st.columns(2)
+                    col_val.metric(label="Trading 212 Total Portfolio Value", value=f"£{t212_total_market_value_gbp:,.2f}", delta=f"£{t212_total_pandl:,.2f}")
+                    col_cash.metric(label="Of which cash investment (delta interest earned)", value=f"£{total_deposit}", delta=f"£{interest}")
+                    df_t212_display = df_t212_positions[['Name', 'Quantity', 'Current Price', 'Currency', 'Market Value GBP', 'PandL GBP']]
+                    st.dataframe(df_t212_display.style.format({
+                        'Quantity': '{:,.4f}',
+                        'Current Price': '{:,.2f}',
+                        'Market Value GBP': '£{:,.2f}',
+                        'PandL GBP': '£{:,.2f}'
+                    }).map(color_green_red, subset=['PandL GBP']), height=400)
+                else:
+                    st.info("No open positions found in Trading 212 history.")
+
+                # ============ TRADING 212 SINGLE INSTRUMENT TRADE HISTORY ============
+                st.subheader("Trading 212 – Instrument Trade History")
+                t212_unique = df_t212_trades[['Ticker', 'Name']].drop_duplicates().sort_values('Ticker')
+                t212_options = [f"{row['Ticker']}  —  {row['Name']}" for _, row in t212_unique.iterrows()]
+                selected_t212 = st.selectbox("Select an instrument to view trades", options=t212_options, key="t212_instrument_select")
+                if selected_t212:
+                    selected_t212_ticker = selected_t212.split("  —  ")[0]
+                    df_t212_selected = df_t212_trades[df_t212_trades['Ticker'] == selected_t212_ticker].sort_values('Time', ascending=False)
+                    st.table(df_t212_selected[['Time', 'Action', 'Name', 'Ticker', 'No. of shares', 'Price / share', 'Currency (Price / share)', 'Total']])
+            else:
+                st.info("No trade actions found in the uploaded Trading 212 file.")
+
+
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TRADING 212 PORTFOLIO ANALYSIS (API-driven)
+# ═══════════════════════════════════════════════════════════════════════
+st.divider()
+st.header("📊 Trading 212 Portfolio Analysis")
+
+# ─── API Authentication ───────────────────────────────────────────────
+# API key is stored in secrets.toml; API secret must be entered manually
+t212_api_key = st.secrets.get("api_keys", {}).get("trading212", "")
+if not t212_api_key:
+    st.warning("⚠️ Trading 212 API key not found in `.streamlit/secrets.toml` under `[api_keys]`.")
+
+t212_api_secret = st.text_input(
+    "🔑 Enter Trading 212 API Secret to start analysis",
+    type="password",
+    help="Your API secret is never stored. It's combined with the API key from secrets.toml to authenticate.",
+    key="t212_api_secret_input"
+)
+
+
+# ─── Helper: paginate through all API results ─────────────────────────
+def fetch_all_paginated(api_func, label="data", delay=1.0, **kwargs):
+    """Fetch all items from a paginated Trading 212 API endpoint."""
+    all_items = []
+    cursor = None
+    page = 1
+    while True:
+        status_msg = st.empty()
+        status_msg.info(f"Fetching {label}... (Page {page}, {len(all_items)} items so far)")
+        
+        if cursor is not None:
+            result = api_func(cursor=cursor, limit=50, **kwargs)
+        else:
+            result = api_func(limit=50, **kwargs)
+            
+        items = result.get("items", [])
+        all_items.extend(items)
+        next_page = result.get("nextPagePath")
+        
+        if not next_page or not items:
+            status_msg.empty()
+            break
+            
+        # Extract cursor from nextPagePath query params
+        from urllib.parse import urlparse, parse_qs
+        parsed = parse_qs(urlparse(next_page).query)
+        cursor = parsed.get("cursor", [None])[0]
+        page += 1
+        
+        # Respect rate limits
+        if delay > 0:
+            time.sleep(delay)
+            
+    return all_items
+
+
+if t212_api_secret:
+    try:
+        t212_client = Trading212API(api_key=t212_api_key, api_secret=t212_api_secret)
+
+        # ============ ACCOUNT SUMMARY ============
+        with st.spinner("Fetching account summary..."):
+            account_summary = t212_client.get_account_summary()
+
+        account_id = account_summary.get("id", "N/A")
+        account_currency = account_summary.get("currency", "GBP")
+        total_value = account_summary.get("totalValue", 0)
+        cash_info = account_summary.get("cash", {})
+        investments_info = account_summary.get("investments", {})
+
+        st.subheader(f"Account Summary (ID: {account_id})")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Account Value", f"£{total_value:,.2f}")
+        col2.metric("Cash Available", f"£{cash_info.get('availableToTrade', 0):,.2f}")
+        col3.metric(
+            "Investments Value",
+            f"£{investments_info.get('currentValue', 0):,.2f}",
+            delta=f"£{investments_info.get('unrealizedProfitLoss', 0):,.2f}"
+        )
+
+        col_cost, col_realised = st.columns(2)
+        col_cost.metric("Total Cost Basis", f"£{investments_info.get('totalCost', 0):,.2f}")
+        col_realised.metric("Realised P&L (All Time)", f"£{investments_info.get('realizedProfitLoss', 0):,.2f}")
+
+        # ============ OPEN POSITIONS (from API - includes live prices) ============
+        with st.spinner("Fetching open positions..."):
+            positions_raw = t212_client.get_open_positions()
+
+        if positions_raw:
+            st.subheader("📈 Current Open Positions")
+
+            rows = []
+            for pos in positions_raw:
+                instrument = pos.get("instrument", {})
+                wallet = pos.get("walletImpact", {})
+                rows.append({
+                    "Ticker": instrument.get("ticker", ""),
+                    "Name": instrument.get("name", ""),
+                    "ISIN": instrument.get("isin", ""),
+                    "Currency": instrument.get("currency", ""),
+                    "Quantity": pos.get("quantity", 0),
+                    "Avg Price Paid": pos.get("averagePricePaid", 0),
+                    "Current Price": pos.get("currentPrice", 0),
+                    "Total Cost (£)": wallet.get("totalCost", 0),
+                    "Current Value (£)": wallet.get("currentValue", 0),
+                    "Unrealised P&L (£)": wallet.get("unrealizedProfitLoss", 0),
+                    "FX Impact (£)": wallet.get("fxImpact", 0),
+                    "Opened": pos.get("createdAt", ""),
+                })
+
+            df_t212_positions = pd.DataFrame(rows)
+
+            # Summary metrics
+            t212_total_value = df_t212_positions["Current Value (£)"].sum()
+            t212_total_cost = df_t212_positions["Total Cost (£)"].sum()
+            t212_total_pnl = df_t212_positions["Unrealised P&L (£)"].sum()
+            t212_total_fx = df_t212_positions["FX Impact (£)"].sum()
+
+            col_val, col_pnl, col_fx = st.columns(3)
+            col_val.metric("Positions Total Value", f"£{t212_total_value:,.2f}")
+            col_pnl.metric("Unrealised P&L", f"£{t212_total_pnl:,.2f}",
+                           delta=f"{t212_total_pnl/t212_total_cost*100:.1f}%" if t212_total_cost else "")
+            col_fx.metric("FX Impact", f"£{t212_total_fx:,.2f}")
+
+            # Portfolio weights pie chart
+            st.plotly_chart(
+                ppw.pie_chart_equity_by_currency(
+                    df_t212_positions[df_t212_positions['Currency'] == 'USD']['Current Value (£)'].sum(),
+                    df_t212_positions[df_t212_positions['Currency'] == 'EUR']['Current Value (£)'].sum(),
+                    df_t212_positions[df_t212_positions['Currency'].isin(['GBP', 'GBX'])]['Current Value (£)'].sum(),
+                    t212_total_value
+                )
+            )
+
+            # Positions table
+            st.dataframe(
+                df_t212_positions[['Name', 'Quantity', 'Avg Price Paid', 'Current Price',
+                                   'Currency', 'Current Value (£)', 'Unrealised P&L (£)', 'FX Impact (£)']]
+                .style.format({
+                    'Quantity': lambda x: f"{x:,.0f}" if x == int(x) else f"{x:,.4f}",
+                    'Avg Price Paid': '{:,.4f}',
+                    'Current Price': '{:,.2f}',
+                    'Current Value (£)': '£{:,.2f}',
+                    'Unrealised P&L (£)': '£{:,.2f}',
+                    'FX Impact (£)': '£{:,.2f}',
+                }).map(color_green_red, subset=['Unrealised P&L (£)', 'FX Impact (£)']),
+            )
+        else:
+            st.info("No open positions found.")
+
+        # ============ HISTORICAL ORDERS (Trade History) ============        
+        st.subheader("🔎 Single Instrument Trade History")
+        
+        # Build options from current open positions
+        t212_options = [""]
+        if 'df_t212_positions' in locals() and not df_t212_positions.empty:
+            t212_unique = df_t212_positions[['Ticker', 'Name']].drop_duplicates().sort_values('Ticker')
+            t212_options += [f"{row['Ticker']}  —  {row['Name']}" for _, row in t212_unique.iterrows()]
+            
+        selected_t212 = st.selectbox("Select an instrument from open positions to view trades:", options=t212_options, key="t212_api_instrument_select")
+        manual_ticker = st.text_input("Or enter a Ticker directly (e.g., AAPL_US_EQ) for closed positions:", key="t212_manual_ticker")
+        
+        target_ticker = manual_ticker.strip().upper() if manual_ticker.strip() else (selected_t212.split("  —  ")[0] if selected_t212 else None)
+        
+        if target_ticker:
+            with st.spinner(f"Fetching historical orders for {target_ticker}... (this may take a moment)"):
+                instrument_orders = fetch_all_paginated(t212_client.get_historical_orders, label=f"orders for {target_ticker}", delay=10.0, ticker=target_ticker)
+            
+            if instrument_orders:
+                order_rows = []
+                for item in instrument_orders:
+                    order = item.get("order", {})
+                    if order.get("status") != "FILLED":
+                        continue
+                    fill = item.get("fill", {})
+                    instrument = order.get("instrument", {})
+                    wallet = fill.get("walletImpact", {})
+                    order_rows.append({
+                        "Date": fill.get("filledAt", order.get("createdAt", "")),
+                        "Side": order.get("side", ""),
+                        "Type": order.get("type", ""),
+                        "Ticker": order.get("ticker", ""),
+                        "Name": instrument.get("name", ""),
+                        "Quantity": order.get("filledQuantity", order.get("quantity", 0)),
+                        "Price": fill.get("price", 0),
+                        "Currency": order.get("currency", ""),
+                        "Net Value (£)": wallet.get("netValue", 0),
+                        "Realised P&L (£)": wallet.get("realisedProfitLoss", 0),
+                        "FX Rate": wallet.get("fxRate", 0),
+                        "Status": order.get("status", ""),
+                        "Source": order.get("initiatedFrom", ""),
+                    })
+
+                df_t212_orders = pd.DataFrame(order_rows)
+                df_t212_orders["Date"] = pd.to_datetime(df_t212_orders["Date"], errors="coerce")
+                df_t212_orders.sort_values("Date", ascending=False, inplace=True)
+
+                st.write(f"Loaded **{len(df_t212_orders)}** historical orders for **{target_ticker}**.")
+                st.dataframe(
+                    df_t212_orders[['Date', 'Side', 'Type', 'Name', 'Quantity', 'Price', 'Currency', 'Net Value (£)']]
+                    .style.format({
+                        'Quantity': lambda x: f"{x:,.0f}" if x == int(x) else f"{x:,.4f}",
+                        'Price': '{:,.4f}',
+                        'Net Value (£)': '£{:,.2f}',
+                    })
+                )
+            else:
+                st.info(f"No historical orders found for {target_ticker}.")
+        else:
+            st.info("Select or enter an instrument to load its trade history.")
+
+        # ============ DIVIDENDS ============
+        st.subheader("💸 Dividends")
+        with st.spinner("Fetching dividends..."):
+            all_dividends = fetch_all_paginated(t212_client.get_dividends, label="dividends", delay=10.0)
+
+        if all_dividends:
+            div_rows = []
+            for div in all_dividends:
+                instrument = div.get("instrument", {})
+                div_rows.append({
+                    "Paid On": div.get("paidOn", ""),
+                    "Ticker": div.get("ticker", ""),
+                    "Name": instrument.get("name", ""),
+                    "Amount (£)": div.get("amount", 0),
+                    "Quantity": div.get("quantity", 0),
+                    "Gross/Share": div.get("grossAmountPerShare", 0),
+                    "Type": div.get("type", ""),
+                    "Currency": div.get("tickerCurrency", ""),
+                })
+
+            df_t212_dividends = pd.DataFrame(div_rows)
+            # Use utc=True to handle mixed timezones and then strip timezone info
+            df_t212_dividends["Paid On"] = pd.to_datetime(df_t212_dividends["Paid On"], utc=True, errors="coerce").dt.tz_localize(None)
+            df_t212_dividends.sort_values("Paid On", ascending=False, inplace=True)
+            
+            # Filter out interest items to be "dividends only"
+            df_t212_dividends = df_t212_dividends[~df_t212_dividends['Type'].str.contains('INTEREST', case=False, na=False)]
+
+            total_dividends = df_t212_dividends["Amount (£)"].sum()
+            st.metric("Total Dividends Received", f"£{total_dividends:,.2f}")
+
+            st.dataframe(
+                df_t212_dividends.style.format({
+                    'Amount (£)': '£{:,.2f}',
+                    'Quantity': '{:,.4f}',
+                    'Gross/Share': '{:,.6f}',
+                })
+            )
+        else:
+            st.info("No dividends found.")
+
+    except Exception as e:
+        st.error(f"❌ Trading 212 API Error: {e}")
+        st.info("Please check your API key and secret are correct.")
