@@ -35,7 +35,7 @@ resource "google_cloud_run_v2_service" "streamlit_app" {
 
       volume_mounts {
         name       = "streamlit-secrets"
-        mount_path = "/usr/src/app/.streamlit"
+        mount_path = "/app/.streamlit"
       }
     }
 
