@@ -10,6 +10,9 @@ import rewrite_plot_portfolio_weights as ppw # TODO: rename to make it more intu
 from market_data_api import OHLC_YahooFinance, HistoricalMarketData
 import glob, socket, platform
 
+from trading212.t212dec import lss
+
+
 
 @st.cache_data
 def get_current_price(tickers: list) -> dict:
@@ -573,23 +576,10 @@ if files_to_process:
 st.divider()
 st.header("📊 Trading 212 Portfolio Analysis")
 
-# ─── API Authentication ───────────────────────────────────────────────
-# API key is stored in secrets.toml; API secret must be entered manually
-t212_api_key = st.secrets.get("api_keys", {}).get("trading212", "")
-if not t212_api_key:
-    st.warning("⚠️ Trading 212 API key not found in `.streamlit/secrets.toml` under `[api_keys]`.")
-
-t212_api_secret = st.text_input(
-    "🔑 Enter Trading 212 API Secret to start analysis",
-    type="password",
-    help="Your API secret is never stored. It's combined with the API key from secrets.toml to authenticate.",
-    key="t212_api_secret_input"
-)
+t212_api_key, t212_api_secret = lss(st.text_input("Enter your passcode to unlock API keys: ", type="password", key="t212_api_secret_input"))
 
 
-
-
-if t212_api_secret:
+if t212_api_secret and t212_api_key:
     try:
         t212_client = Trading212API(api_key=t212_api_key, api_secret=t212_api_secret)
 
