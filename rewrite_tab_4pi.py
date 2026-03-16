@@ -11,6 +11,8 @@ from market_data_api import OHLC_YahooFinance, HistoricalMarketData
 import glob, socket, platform
 
 from trading212.t212dec import lss
+from trading212_api import Trading212API
+
 
 
 
