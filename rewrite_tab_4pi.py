@@ -301,8 +301,12 @@ if _is_pi_mode:
     downloads_dir = os.path.expanduser('~/Downloads')
     trade_files = sorted(glob.glob(os.path.join(downloads_dir, 'Trade*.csv')))
     trans_files = sorted(glob.glob(os.path.join(downloads_dir, 'Transaction*.csv')))
-    # extend with file paths (strings)
-    files_to_process.extend(trade_files + trans_files)
+    # Only use the most recent Trade and Transaction files to avoid
+    # duplicate sections and StreamlitDuplicateElementId errors
+    if trade_files:
+        files_to_process.append(trade_files[-1])
+    if trans_files:
+        files_to_process.append(trans_files[-1])
 
 if files_to_process:
     for f in files_to_process:
