@@ -120,3 +120,121 @@ def pie_chart_equity_by_currency(USD_market_value_in_gbp, EUR_market_value_in_gb
         title=f'Portfolio Currency Breakdown (Total Market Value: £{Total_market_value_gbp:,.2f})'
     )
     return fig
+
+
+def ticker_price_chart_with_trades(df_ohlc, df_trades, ticker: str, currency: str = ""):
+    """Create a line chart of close price with buy/sell trade markers.
+
+    Args:
+        df_ohlc: OHLC DataFrame with columns ['Date', 'close'] (other cols ignored)
+        df_trades: Trade history DataFrame with columns ['Date', 'Direction', 'Price', 'Quantity']
+        ticker: The ticker symbol (used in the title)
+        currency: The currency of the price (e.g. 'USD', 'GBP')
+    """
+    fig = go.Figure()
+
+    # ── Close price line with subtle fill ──
+    fig.add_trace(
+        go.Scatter(
+            x=df_ohlc['Date'],
+            y=df_ohlc['close'],
+            mode='lines',
+            line=dict(color='#64B5F6', width=2.5),
+            fill='tozeroy',
+            fillcolor='rgba(100, 181, 246, 0.08)',
+            name='Close Price',
+            hovertemplate='%{x|%Y-%m-%d}<br>Close: %{y:,.2f}<extra></extra>',
+        )
+    )
+
+    # ── Buy markers ──
+    buys = df_trades[df_trades['Direction'].str.upper() == 'BUY']
+    if not buys.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=buys['Date'],
+                y=buys['Price'],
+                mode='markers+text',
+                marker=dict(
+                    symbol='triangle-up',
+                    size=14,
+                    color='#00E676',
+                    line=dict(width=1.5, color='white'),
+                ),
+                text=[f"BUY {q}" for q in buys['Quantity']],
+                textposition='top center',
+                textfont=dict(size=10, color='#00E676'),
+                name='Buy',
+                hovertemplate=(
+                    '<b>BUY</b><br>'
+                    'Date: %{x|%Y-%m-%d}<br>'
+                    'Price: %{y:,.2f}<br>'
+                    '<extra></extra>'
+                ),
+            )
+        )
+
+    # ── Sell markers ──
+    sells = df_trades[df_trades['Direction'].str.upper() == 'SELL']
+    if not sells.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=sells['Date'],
+                y=sells['Price'],
+                mode='markers+text',
+                marker=dict(
+                    symbol='triangle-down',
+                    size=14,
+                    color='#FF5252',
+                    line=dict(width=1.5, color='white'),
+                ),
+                text=[f"SELL {q}" for q in sells['Quantity']],
+                textposition='bottom center',
+                textfont=dict(size=10, color='#FF5252'),
+                name='Sell',
+                hovertemplate=(
+                    '<b>SELL</b><br>'
+                    'Date: %{x|%Y-%m-%d}<br>'
+                    'Price: %{y:,.2f}<br>'
+                    '<extra></extra>'
+                ),
+            )
+        )
+
+    # ── Layout ──
+    currency_label = f" ({currency})" if currency else ""
+    fig.update_layout(
+        title={
+            'text': f'<b>{ticker} – Price History & Trades</b>',
+            'y': 0.97,
+            'x': 0.5,
+            'xanchor': 'center',
+            'yanchor': 'top',
+            'font': {'size': 18, 'color': '#F4D03F'},
+        },
+        plot_bgcolor='#1a1a2e',
+        paper_bgcolor='#1a1a2e',
+        font=dict(family='Arial, sans-serif', color='#E0E0E0'),
+        hovermode='x unified',
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(size=12, color='#FFFFFF'),
+            bgcolor='rgba(40, 40, 70, 0.85)',
+            bordercolor='rgba(255, 255, 255, 0.3)',
+            borderwidth=1,
+        ),
+        margin=dict(t=70, b=40, l=60, r=30),
+        height=500,
+        xaxis=dict(gridcolor='rgba(255,255,255,0.08)', showgrid=True),
+        yaxis=dict(
+            title=f'Price{currency_label}',
+            gridcolor='rgba(255,255,255,0.08)',
+            showgrid=True,
+        ),
+    )
+
+    return fig
