@@ -470,6 +470,35 @@ if files_to_process:
                 st.subheader(f"Trade History for {selected_company} ({selected_ticker})")
                 st.table(df_ticker_trade_history[['Market', 'Ticker', 'Date', 'Direction', 'Quantity','Price', 'Currency']])
 
+                # ── Historical price chart with buy/sell markers ──
+                try:
+                    first_trade_date = df_ticker_trade_history['Date'].min()
+                    start_date_str = first_trade_date.strftime('%Y-%m-%d')
+                    df_ohlc = OHLC_YahooFinance(selected_ticker, start_date_str).yahooDataV8()
+                    df_ohlc['Date'] = pd.to_datetime(df_ohlc['Date'])
+
+                    # Prepare trade markers (ensure numeric Price & datetime Date)
+                    df_trades_for_chart = df_ticker_trade_history[['Date', 'Direction', 'Price', 'Quantity']].copy()
+                    df_trades_for_chart['Date'] = pd.to_datetime(df_trades_for_chart['Date'])
+                    df_trades_for_chart['Price'] = pd.to_numeric(df_trades_for_chart['Price'], errors='coerce')
+                    df_trades_for_chart['Quantity'] = pd.to_numeric(df_trades_for_chart['Quantity'], errors='coerce').abs()
+
+                    # IG quotes prices in pence/cents; Yahoo returns in pounds/dollars.
+                    # Auto-detect and normalise: if median trade price is ~100x median close, divide by 100.
+                    median_trade = df_trades_for_chart['Price'].median()
+                    median_close = df_ohlc['close'].median()
+                    if median_close > 0 and 50 < (median_trade / median_close) < 200:
+                        df_trades_for_chart['Price'] = df_trades_for_chart['Price'] / 100
+
+                    trade_currency = df_ticker_trade_history['Currency'].iloc[0] if not df_ticker_trade_history.empty else ''
+                    fig_ticker = ppw.ticker_price_chart_with_trades(
+                        df_ohlc, df_trades_for_chart, selected_ticker, currency=trade_currency
+                    )
+                    st.plotly_chart(fig_ticker, use_container_width=True)
+                except Exception as e:
+                    st.warning(f"⚠️ Could not load market data chart for {selected_ticker}: {e}")
+
+
 
 
             # plot portfolio weights TODO: buggy, eg use any symbol highlight won't work
