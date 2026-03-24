@@ -1,0 +1,22 @@
+{
+    "git.autoRepositoryDetection": false,
+    "git.scanRepositories": [],
+    "git.repositoryScanIgnoredFolders": [
+        "/Users/kai/Library/Application Support/Google/Chrome",
+        "**/Library/Application Support/Google/Chrome/**"
+    ],
+    "files.exclude": {
+        "**/Library/Application Support/Google/Chrome/**": true
+    },
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.profiles.osx": {
+        "bash (venv)": {
+            "path": "bash",
+            "args": [
+                "--init-file",
+                "${workspaceFolder}/.venv/bin/activate"
+            ]
+        }
+    },
+    "terminal.integrated.defaultProfile.osx": "bash (venv)"
+}
