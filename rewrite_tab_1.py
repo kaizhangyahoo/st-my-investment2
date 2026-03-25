@@ -10,6 +10,7 @@ from getEODprice import getEODpriceUK, getEODpriceUSA, getEODpriceISIN
 import rewrite_plot_portfolio_weights as ppw # TODO: rename to make it more intuitive
 from market_data_api import OHLC_YahooFinance, HistoricalMarketData
 from trading212_api import Trading212API
+from urllib.parse import urlparse, parse_qs
 
 
 @st.cache_data
@@ -217,6 +218,41 @@ def get_portfolio_value_history(
     
     return account_cache
 
+# ─── Helper: paginate through all API results ─────────────────────────
+def fetch_all_paginated(api_func, label="data", delay=1.0, **kwargs):
+    """Fetch all items from a paginated Trading 212 API endpoint."""
+    all_items = []
+    cursor = None
+    page = 1
+    while True:
+        status_msg = st.empty()
+        status_msg.info(f"Fetching {label}... (Page {page}, {len(all_items)} items so far)")
+        
+        if cursor is not None:
+            result = api_func(cursor=cursor, limit=50, **kwargs)
+        else:
+            result = api_func(limit=50, **kwargs)
+            
+        items = result.get("items", [])
+        all_items.extend(items)
+        next_page = result.get("nextPagePath")
+        
+        if not next_page or not items:
+            status_msg.empty()
+            break
+            
+        # Extract cursor from nextPagePath query params
+        parsed = parse_qs(urlparse(next_page).query)
+        cursor = parsed.get("cursor", [None])[0]
+        page += 1
+        
+        # Respect rate limits
+        if delay > 0:
+            time.sleep(delay)
+            
+    return all_items
+
+
 def t212_convert_to_gbp(row):
     if row['Currency'] == 'GBX' or row.name.endswith('.L'):
         return row['Market Value']
@@ -225,8 +261,36 @@ def t212_convert_to_gbp(row):
     else:  # USD
         return row['Market Value'] / t212_GBPUSD.iloc[-1]
 
+@st.cache_data(show_spinner=False)
+def fetch_t212_historical_prices(tickers: list, start_date: str):
+    all_price_data = {}
+    for ytk in tickers:
+        try:
+            ohlc = OHLC_YahooFinance(ytk, start_date).yahooDataV8()
+            ohlc["Date"] = pd.to_datetime(ohlc["Date"])
+            all_price_data[ytk] = ohlc.set_index("Date")["close"]
+        except Exception as e:
+            print(f"Could not fetch Yahoo data for {ytk}: {e}")
+    return all_price_data
+
+@st.cache_data(ttl=3600, show_spinner=True)
+def get_cached_t212_all_orders(api_key, api_secret):
+    client = Trading212API(api_key=api_key, api_secret=api_secret)
+    return fetch_all_paginated(client.get_historical_orders, label="all orders", delay=10.0)
+
 
 st.title("Portfolio Management Dashboard and Analytics")
+
+# Load company name → Yahoo ticker mapping once, at the top level,
+# so it is available in both the CSV-upload section and the API section.
+_pwd = os.path.dirname(os.path.realpath(__file__))
+_reference_data_json_file = _pwd + '/company_name_to_ticker.json'
+if os.path.exists(_reference_data_json_file):
+    with open(_reference_data_json_file, 'r') as _jf:
+        company_name_to_ticker = json.load(_jf)
+else:
+    company_name_to_ticker = {}
+
 
 st.header("Upload Trade/Transaction History")
 uploaded_file = st.file_uploader('''\
@@ -246,8 +310,6 @@ if uploaded_file is not None:
             # add ticker to trade history table
             pwd = os.path.dirname(os.path.realpath(__file__))
             reference_data_json_file = pwd + '/company_name_to_ticker.json'
-            with open(reference_data_json_file, 'r') as json_file: # TODO: move this to a database instead
-                company_name_to_ticker = json.load(json_file)
             df_trade_history['Ticker'] = df_trade_history['Market'].map(company_name_to_ticker)
             
             ## find missing symbols
@@ -516,23 +578,6 @@ if uploaded_file is not None:
 
 
 
-        elif f.name.startswith("Transaction") and f.name.endswith(".csv"):
-            df_transactions = pd.read_csv(f)
-            df_transactions['Summary'] = df_transactions['Summary'].fillna('Cash Interest - Platform Cost')
-            type_dict = {'TextDate': 'datetime64[s]', 'PL Amount': 'float', 'Summary': 'category', 'Transaction type': 'category', 'Cash transaction': 'boolean', 'MarketName': 'string'}
-            df_transactions['PL Amount'] = df_transactions['PL Amount'].str.replace(',','')
-            df_transactions = df_transactions.astype(type_dict)
-            df_transactions.loc[df_transactions['MarketName'] == 'Bank Deposit', 'Summary'] = 'Cash In'
-            df_cashIn = df_transactions[df_transactions['Summary']=='Cash In' ]
-            st.metric(label="Total Cash Invested", value=f"£{df_cashIn['PL Amount'].sum():,.2f}")
-            net_cashflow = {}
-            for i in df_transactions['Summary'].unique():
-                net_cashflow[i] = df_transactions[df_transactions['Summary'] == i]['PL Amount'].sum()
-            st.write(net_cashflow)
-            fig = ppw.plot_cashflow(net_cashflow)
-            st.plotly_chart(fig, width="stretch")
-
-
         # ============ TRADING 212 analyze manually downloaded history file ============
         elif f.name.startswith("from") and f.name.endswith(".csv"):
             df_trading212_history = pd.read_csv(f)
@@ -665,40 +710,6 @@ t212_api_secret = st.text_input(
 )
 
 
-# ─── Helper: paginate through all API results ─────────────────────────
-def fetch_all_paginated(api_func, label="data", delay=1.0, **kwargs):
-    """Fetch all items from a paginated Trading 212 API endpoint."""
-    all_items = []
-    cursor = None
-    page = 1
-    while True:
-        status_msg = st.empty()
-        status_msg.info(f"Fetching {label}... (Page {page}, {len(all_items)} items so far)")
-        
-        if cursor is not None:
-            result = api_func(cursor=cursor, limit=50, **kwargs)
-        else:
-            result = api_func(limit=50, **kwargs)
-            
-        items = result.get("items", [])
-        all_items.extend(items)
-        next_page = result.get("nextPagePath")
-        
-        if not next_page or not items:
-            status_msg.empty()
-            break
-            
-        # Extract cursor from nextPagePath query params
-        from urllib.parse import urlparse, parse_qs
-        parsed = parse_qs(urlparse(next_page).query)
-        cursor = parsed.get("cursor", [None])[0]
-        page += 1
-        
-        # Respect rate limits
-        if delay > 0:
-            time.sleep(delay)
-            
-    return all_items
 
 
 if t212_api_secret:
@@ -798,20 +809,36 @@ if t212_api_secret:
         # ============ HISTORICAL ORDERS (Trade History) ============        
         st.subheader("🔎 Single Instrument Trade History")
         
-        # Build options from current open positions
+        with st.spinner("Fetching historical order metadata to build dropdown... (may take a moment initially)"):
+            all_orders = get_cached_t212_all_orders(t212_api_key, t212_api_secret)
+
+        # Build options from all historically traded instruments
         t212_options = [""]
-        if 'df_t212_positions' in locals() and not df_t212_positions.empty:
-            t212_unique = df_t212_positions[['Ticker', 'Name']].drop_duplicates().sort_values('Ticker')
-            t212_options += [f"{row['Ticker']}  —  {row['Name']}" for _, row in t212_unique.iterrows()]
+        if all_orders:
+            traded_instruments = {}
+            for item in all_orders:
+                order = item.get("order", {})
+                if order.get("status") == "FILLED":
+                    tkr = order.get("ticker", "")
+                    name = order.get("instrument", {}).get("name", "")
+                    if tkr and name:
+                        traded_instruments[tkr] = name
             
-        selected_t212 = st.selectbox("Select an instrument from open positions to view trades:", options=t212_options, key="t212_api_instrument_select")
-        manual_ticker = st.text_input("Or enter a Ticker directly (e.g., AAPL_US_EQ) for closed positions:", key="t212_manual_ticker")
+            # Sort by ticker name
+            sorted_tickers = sorted(traded_instruments.items(), key=lambda x: x[0])
+            t212_options += [f"{tkr}  —  {name}" for tkr, name in sorted_tickers]
+            
+        selected_t212 = st.selectbox("Select an instrument you have traded to view history:", options=t212_options, key="t212_api_instrument_select")
+        manual_ticker = st.text_input("Or enter a Ticker directly (e.g., AAPL_US_EQ):", key="t212_manual_ticker")
         
         target_ticker = manual_ticker.strip().upper() if manual_ticker.strip() else (selected_t212.split("  —  ")[0] if selected_t212 else None)
         
         if target_ticker:
-            with st.spinner(f"Fetching historical orders for {target_ticker}... (this may take a moment)"):
-                instrument_orders = fetch_all_paginated(t212_client.get_historical_orders, label=f"orders for {target_ticker}", delay=10.0, ticker=target_ticker)
+            # Efficiently filter from the already-fetched and cached all_orders
+            instrument_orders = [
+                item for item in all_orders 
+                if item.get("order", {}).get("ticker") == target_ticker
+            ]
             
             if instrument_orders:
                 order_rows = []
@@ -896,6 +923,139 @@ if t212_api_secret:
             )
         else:
             st.info("No dividends found.")
+
+        # ============ PORTFOLIO VALUE OVER TIME ============
+        st.subheader("📈 Trading 212 – Portfolio Value Over Time")
+
+        if all_orders:
+            # ── 1. Build a DataFrame of all filled trades ──
+            trade_rows = []
+            for item in all_orders:
+                order = item.get("order", {})
+                if order.get("status") != "FILLED":
+                    continue
+                fill = item.get("fill", {})
+                instrument = order.get("instrument", {})
+                side = order.get("side", "")
+                qty = order.get("filledQuantity", order.get("quantity", 0))
+                signed_qty = qty if side == "BUY" else -qty
+                trade_rows.append({
+                    "Date": pd.to_datetime(fill.get("filledAt", order.get("createdAt", "")), utc=True, errors="coerce"),
+                    "Ticker_T212": order.get("ticker", ""),
+                    "Currency": instrument.get("currency", order.get("currency", "")),
+                    "Signed_Qty": signed_qty,
+                    "Price": fill.get("price", 0),
+                })
+
+            df_all_trades = pd.DataFrame(trade_rows)
+            df_all_trades = df_all_trades.dropna(subset=["Date"])
+            df_all_trades["Date"] = df_all_trades["Date"].dt.tz_localize(None)
+            df_all_trades.sort_values("Date", inplace=True)
+
+
+            # ── 3. Fetch historical prices from Yahoo Finance ──
+            # Build a map from T212 ticker → Yahoo ticker.
+            # T212 tickers for US stocks are usually already Yahoo-compatible;
+            # the company_name_to_ticker JSON provides overrides where needed.
+            first_trade_date = df_all_trades["Date"].min().strftime("%Y-%m-%d")
+            unique_t212_tickers = df_all_trades["Ticker_T212"].unique()
+            ticker_map = {t: company_name_to_ticker.get(t, t) for t in unique_t212_tickers}
+            df_all_trades["Yahoo_Ticker"] = df_all_trades["Ticker_T212"].map(ticker_map)
+            yahoo_tickers = list(ticker_map.values())
+
+            
+
+            with st.spinner("Fetching historical market prices from Yahoo Finance..."):
+                price_data = fetch_t212_historical_prices(yahoo_tickers, first_trade_date)
+
+            # ── 4. Build a combined price DataFrame (dates as index, tickers as columns) ──
+            if price_data:
+                df_prices = pd.DataFrame(price_data)
+                df_prices.index = pd.to_datetime(df_prices.index)
+                df_prices = df_prices.sort_index()
+                # Forward-fill missing prices (weekends/holidays)
+                df_prices = df_prices.ffill()
+
+                # ── 5. Reconstruct daily positions ──
+                # For each trading day, cumsum the signed quantities per ticker
+                all_dates = df_prices.index
+                # Build a pivot of cumulative holdings by date
+                df_all_trades["Trade_Date"] = df_all_trades["Date"].dt.normalize()
+                daily_trades = df_all_trades.groupby(["Trade_Date", "Yahoo_Ticker"])["Signed_Qty"].sum().unstack(fill_value=0)
+                # Reindex to all price dates and cumsum
+                daily_trades = daily_trades.reindex(all_dates, fill_value=0)
+                cumulative_holdings = daily_trades.cumsum()
+
+                # ── 6. Fetch FX rates ──
+                t212_fx_rates = get_historical_fx(first_trade_date)
+                fx_usd = t212_fx_rates.get("GBPUSD=X", pd.Series(dtype=float))
+                fx_eur = t212_fx_rates.get("GBPEUR=X", pd.Series(dtype=float))
+
+                # Build currency map: Yahoo ticker -> currency
+                currency_map = {}
+                for t212_tk, yahoo_tk in ticker_map.items():
+                    cur = df_all_trades.loc[df_all_trades["Ticker_T212"] == t212_tk, "Currency"].iloc[0]
+                    currency_map[yahoo_tk] = cur
+
+                # ── 7. Calculate daily portfolio value in GBP ──
+                portfolio_values = []
+                for date in all_dates:
+                    total_gbp = 0.0
+                    for ytk in cumulative_holdings.columns:
+                        qty = cumulative_holdings.loc[date, ytk]
+                        if abs(qty) < 1e-9:
+                            continue
+                        price = df_prices.loc[date, ytk] if ytk in df_prices.columns and pd.notna(df_prices.loc[date, ytk]) else None
+                        if price is None:
+                            continue
+                        market_value = qty * price
+                        cur = currency_map.get(ytk, "GBP")
+                        if cur == "USD":
+                            gbp_rate = fx_usd.asof(date)
+                            if pd.notna(gbp_rate) and gbp_rate > 0:
+                                total_gbp += market_value / gbp_rate
+                        elif cur == "EUR":
+                            gbp_rate = fx_eur.asof(date)
+                            if pd.notna(gbp_rate) and gbp_rate > 0:
+                                total_gbp += market_value / gbp_rate
+                        elif cur in ("GBP", "GBX"):
+                            total_gbp += market_value / 100  # GBX pence to pounds
+                        else:
+                            total_gbp += market_value  # fallback
+                    portfolio_values.append({"Date": date, "Portfolio Value (GBP)": total_gbp})
+
+                df_t212_portfolio_history = pd.DataFrame(portfolio_values)
+                # Drop dates before the first trade (value would be 0)
+                df_t212_portfolio_history = df_t212_portfolio_history[df_t212_portfolio_history["Portfolio Value (GBP)"] > 0]
+
+                if not df_t212_portfolio_history.empty:
+                    # ── 8. Cache to JSON ──
+                    t212_cache_file = "t212_portfolio_values.json"
+                    pwd = os.path.dirname(os.path.realpath(__file__))
+                    t212_cache_path = os.path.join(pwd, t212_cache_file)
+
+                    t212_cached = {}
+                    if os.path.exists(t212_cache_path):
+                        with open(t212_cache_path, "r") as cf:
+                            t212_cached = json.load(cf)
+
+                    acct_key = str(account_id)
+                    t212_cached[acct_key] = {
+                        row["Date"].strftime("%Y-%m-%d"): row["Portfolio Value (GBP)"]
+                        for _, row in df_t212_portfolio_history.iterrows()
+                    }
+                    with open(t212_cache_path, "w") as cf:
+                        json.dump(t212_cached, cf, indent=2)
+
+                    # ── 9. Plot ──
+                    fig_t212_pv = ppw.portfolio_value_over_time(df_t212_portfolio_history, account_id)
+                    st.plotly_chart(fig_t212_pv, use_container_width=True)
+                else:
+                    st.info("Not enough data to plot portfolio value over time.")
+            else:
+                st.warning("Could not fetch any historical price data from Yahoo Finance.")
+        else:
+            st.info("No historical orders found – cannot reconstruct portfolio value history.")
 
     except Exception as e:
         st.error(f"❌ Trading 212 API Error: {e}")
