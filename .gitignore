@@ -5,4 +5,7 @@ terraform/.terraform/*
 terraform/.terraform.lock.hcl
 ig/ig_login_test.py
 ig/ig_positions.py
-~/
+.streamlit/secrets.toml
+.chatledger/*
+.env
+.DS_Store
