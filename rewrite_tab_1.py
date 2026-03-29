@@ -261,18 +261,6 @@ def t212_convert_to_gbp(row):
     else:  # USD
         return row['Market Value'] / t212_GBPUSD.iloc[-1]
 
-@st.cache_data(show_spinner=False)
-def fetch_t212_historical_prices(tickers: list, start_date: str):
-    all_price_data = {}
-    for ytk in tickers:
-        try:
-            ohlc = OHLC_YahooFinance(ytk, start_date).yahooDataV8()
-            ohlc["Date"] = pd.to_datetime(ohlc["Date"])
-            all_price_data[ytk] = ohlc.set_index("Date")["close"]
-        except Exception as e:
-            print(f"Could not fetch Yahoo data for {ytk}: {e}")
-    return all_price_data
-
 @st.cache_data(ttl=3600, show_spinner=True)
 def get_cached_t212_all_orders(api_key, api_secret):
     client = Trading212API(api_key=api_key, api_secret=api_secret)
@@ -954,27 +942,27 @@ if t212_api_secret:
 
 
             # ── 3. Fetch historical prices from Yahoo Finance ──
-            # Build a map from T212 ticker → Yahoo ticker.
-            # T212 tickers for US stocks are usually already Yahoo-compatible;
-            # the company_name_to_ticker JSON provides overrides where needed.
-            first_trade_date = df_all_trades["Date"].min().strftime("%Y-%m-%d")
-            unique_t212_tickers = df_all_trades["Ticker_T212"].unique()
-            ticker_map = {t: company_name_to_ticker.get(t, t) for t in unique_t212_tickers}
-            df_all_trades["Yahoo_Ticker"] = df_all_trades["Ticker_T212"].map(ticker_map)
-            yahoo_tickers = list(ticker_map.values())
+            df_all_trades["Yahoo_Ticker"] = df_all_trades["Ticker_T212"].map(company_name_to_ticker)
 
+            all_prices = []
+
+            for ticker in df_all_trades['Yahoo_Ticker'].unique():
+                df1tickrt = df_all_trades[df_all_trades['Yahoo_Ticker']== ticker]
+                startDate = min(df1tickrt['Date']).date()
+                new_data = OHLC_YahooFinance(ticker, start_date=startDate.strftime("%Y-%m-%d")).yahooDataV8()
+                new_data['ticker'] = ticker
+                all_prices.append(new_data)
+
+            price_data = pd.concat(all_prices, ignore_index=True) # Combine everything at once
+            price_data = price_data[['ticker', 'Date', 'close']]
             
-
-            with st.spinner("Fetching historical market prices from Yahoo Finance..."):
-                price_data = fetch_t212_historical_prices(yahoo_tickers, first_trade_date)
-
             # ── 4. Build a combined price DataFrame (dates as index, tickers as columns) ──
-            if price_data:
-                df_prices = pd.DataFrame(price_data)
-                df_prices.index = pd.to_datetime(df_prices.index)
-                df_prices = df_prices.sort_index()
-                # Forward-fill missing prices (weekends/holidays)
-                df_prices = df_prices.ffill()
+            # if price_data:
+            #     df_prices = pd.DataFrame(price_data)
+            #     df_prices.index = pd.to_datetime(df_prices.index)
+            #     df_prices = df_prices.sort_index()
+            #     # Forward-fill missing prices (weekends/holidays)
+            #     df_prices = df_prices.ffill()
 
                 # ── 5. Reconstruct daily positions ──
                 # For each trading day, cumsum the signed quantities per ticker
