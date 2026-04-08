@@ -1000,7 +1000,7 @@ if t212_api_secret:
             price_data['Currency'] = price_data['ticker'].map(lambda x: df_all_trades[df_all_trades['Yahoo_Ticker'] == x]['Currency'].iloc[0])
 
             # get FX rate by checking if GBPUSD and GBPEUR variables already ready and waiting
-            if GBPUSD not in locals() or min(GBPUSD.index) <= price_data[price_data['Currency'] == 'USD']['Date'].min(): # TO_TEST, and GBPUSD only for now
+            if 'GBPUSD' not in locals() or min(GBPUSD.index) <= price_data[price_data['Currency'] == 'USD']['Date'].min(): # TO_TEST, and GBPUSD only for now
                 GBPUSD = get_historical_fx(price_data[price_data['Currency'] == 'USD']['Date'].min().strftime("%Y-%m-%d"))['GBPUSD=X']
             
             price_data['GBP_Close'] = price_data.apply(lambda row: row['close'] / GBPUSD.asof(row['Date']) if row['Currency'] == 'USD' else row['close']/100 if row['Currency'] == 'GBX' else row['close'], axis=1)
@@ -1025,10 +1025,10 @@ if t212_api_secret:
             market_values['total_value'] = market_values.sum(axis=1)
             
             # === plot the total portfolio value over time ===
-            fig_t212 = t212_portfolio_value_over_time(df_all_trades, market_values)
+            fig_t212 = ppw.t212_portfolio_value_over_time(df_all_trades, market_values)
             st.plotly_chart(fig_t212)
 
 
     except Exception as e:
-        st.error(f"❌ Trading 212 API Error: {e}")
+        st.error(f"❌ Trading 212 API Error: {e}"); import traceback; traceback.print_exc()
         st.info("Please check your API key and secret are correct.")
