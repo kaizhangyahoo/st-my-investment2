@@ -113,8 +113,13 @@ df_daily_trades = df_all_trades.pivot_table(
 
 df_fill_positions = df_daily_trades.cumsum()
 
+# Expand to every calendar day up to today, forward-filling positions
+today = pd.Timestamp.now(tz='UTC').normalize()
+full_date_range = pd.date_range(start=df_fill_positions.index.min(), end=today, freq='D')
+df_fill_positions = df_fill_positions.reindex(full_date_range).ffill().fillna(0)
+df_fill_positions.index.name = 'Date'
 
-print(df_fill_positions.tail(2))
+print(df_fill_positions.tail(5))
 
 # the logic below is to aggregate orders
 records = []
