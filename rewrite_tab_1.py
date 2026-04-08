@@ -915,35 +915,76 @@ if t212_api_secret:
         # ============ PORTFOLIO VALUE OVER TIME ============
         st.subheader("📈 Trading 212 – Portfolio Value Over Time")
 
+        # The logic is to fetch all historical orders, then aggregate them by fills
+        order_aggregates = {}
+        seen_fill_ids = set()  
+
         if all_orders:
-            # ── 1. Build a DataFrame of all filled trades ──
-            trade_rows = []
             for item in all_orders:
                 order = item.get("order", {})
                 if order.get("status") != "FILLED":
                     continue
+                order_id = order.get("id")
                 fill = item.get("fill", {})
+
+                fill_id = fill.get("id")
+                if fill_id and fill_id in seen_fill_ids:
+                    continue # skip duplicate fills
+                if fill_id:
+                    seen_fill_ids.add(fill_id)
+
+
                 instrument = order.get("instrument", {})
                 side = order.get("side", "")
-                qty = order.get("filledQuantity", order.get("quantity", 0))
-                signed_qty = qty if side == "BUY" else -qty
-                trade_rows.append({
-                    "Date": pd.to_datetime(fill.get("filledAt", order.get("createdAt", "")), utc=True, errors="coerce"),
-                    "Ticker_T212": order.get("ticker", ""),
-                    "Currency": instrument.get("currency", order.get("currency", "")),
-                    "Signed_Qty": signed_qty,
-                    "Price": fill.get("price", 0),
-                })
+                qty = fill.get("quantity", order.get("filledQuantity", order.get("quantity", 0)))
+                
+                if order_id not in order_aggregates:
+                    order_aggregates[order_id] = {
+                        "Date": pd.to_datetime(fill.get("filledAt", order.get("createdAt", "")), utc=True, errors="coerce"),
+                        "Ticker_T212": order.get("ticker", ""),
+                        "Currency": instrument.get("currency", order.get("currency", "")),
+                        "Quantity": 0,
+                        "Price": fill.get("price", 0),
+                        "Side": side,
+                    }
+                order_aggregates[order_id]["Quantity"] += qty
+                if fill.get("price"):
+                    order_aggregates[order_id]["Price"] = fill.get("price", 0)
 
+            trade_rows = []
+            for order_id, data in order_aggregates.items():
+                signed_qty = data["Quantity"] if data["Side"] == "BUY" else -data["Quantity"] # never sold, so won't know if this is correct
+                trade_rows.append({
+                    "Date": data["Date"],
+                    "Ticker_T212": data["Ticker_T212"],
+                    "Currency": data["Currency"],
+                    "Signed_Qty": signed_qty,
+                    "Price": data["Price"],
+                    "Side": data['Side'],
+                })
             df_all_trades = pd.DataFrame(trade_rows)
-            df_all_trades = df_all_trades.dropna(subset=["Date"])
-            df_all_trades["Date"] = df_all_trades["Date"].dt.tz_localize(None)
             df_all_trades.sort_values("Date", inplace=True)
 
+            df_all_trades['Date'] = df_all_trades['Date'].dt.normalize() 
+            df_daily_trades = df_all_trades.pivot_table(
+                index='Date', 
+                columns='Ticker_T212',
+                values='Signed_Qty', 
+                aggfunc='sum'
+            ).fillna(0)
 
-            # ── 3. Fetch historical prices from Yahoo Finance ──
-            df_all_trades["Yahoo_Ticker"] = df_all_trades["Ticker_T212"].map(company_name_to_ticker)
+            df_fill_positions = df_daily_trades.cumsum()
+            # st.table(df_fill_positions.tail(5))
+            if company_name_to_ticker: # TODO: if company_name_to_ticker contains all the mapping from Ticker_T212 to Yahoo_Ticker
+                df_positions_yahoo = df_fill_positions.rename(columns=company_name_to_ticker)
+            else:
+                print("company_name_to_ticker is empty, cannot rename columns, portfolio value over time will fail")
 
+
+
+            # ── Yahoo finance all historical data for instruments ──
+            df_all_trades['Yahoo_Ticker'] = df_all_trades['Ticker_T212'].map(company_name_to_ticker)
+            
             all_prices = []
 
             for ticker in df_all_trades['Yahoo_Ticker'].unique():
@@ -955,95 +996,38 @@ if t212_api_secret:
 
             price_data = pd.concat(all_prices, ignore_index=True) # Combine everything at once
             price_data = price_data[['ticker', 'Date', 'close']]
+            price_data['Date'] = pd.to_datetime(price_data['Date'])
+            price_data['Currency'] = price_data['ticker'].map(lambda x: df_all_trades[df_all_trades['Yahoo_Ticker'] == x]['Currency'].iloc[0])
+
+            # get FX rate by checking if GBPUSD and GBPEUR variables already ready and waiting
+            if GBPUSD not in locals() or min(GBPUSD.index) <= price_data[price_data['Currency'] == 'USD']['Date'].min(): # TO_TEST, and GBPUSD only for now
+                GBPUSD = get_historical_fx(price_data[price_data['Currency'] == 'USD']['Date'].min().strftime("%Y-%m-%d"))['GBPUSD=X']
             
-            # ── 4. Build a combined price DataFrame (dates as index, tickers as columns) ──
-            # if price_data:
-            #     df_prices = pd.DataFrame(price_data)
-            #     df_prices.index = pd.to_datetime(df_prices.index)
-            #     df_prices = df_prices.sort_index()
-            #     # Forward-fill missing prices (weekends/holidays)
-            #     df_prices = df_prices.ffill()
+            price_data['GBP_Close'] = price_data.apply(lambda row: row['close'] / GBPUSD.asof(row['Date']) if row['Currency'] == 'USD' else row['close']/100 if row['Currency'] == 'GBX' else row['close'], axis=1)
+            
+            # ====== Pivot price_data to wide format matching df_positions (Date × Yahoo_Ticker) ======
+            price_wide = price_data.pivot_table(index='Date', columns='ticker', values='GBP_Close')
 
-                # ── 5. Reconstruct daily positions ──
-                # For each trading day, cumsum the signed quantities per ticker
-                all_dates = df_prices.index
-                # Build a pivot of cumulative holdings by date
-                df_all_trades["Trade_Date"] = df_all_trades["Date"].dt.normalize()
-                daily_trades = df_all_trades.groupby(["Trade_Date", "Yahoo_Ticker"])["Signed_Qty"].sum().unstack(fill_value=0)
-                # Reindex to all price dates and cumsum
-                daily_trades = daily_trades.reindex(all_dates, fill_value=0)
-                cumulative_holdings = daily_trades.cumsum()
+            # Align price_data dates to timezone-aware to match df_positions index
+            price_wide.index = price_wide.index.tz_localize('UTC')
 
-                # ── 6. Fetch FX rates ──
-                t212_fx_rates = get_historical_fx(first_trade_date)
-                fx_usd = t212_fx_rates.get("GBPUSD=X", pd.Series(dtype=float))
-                fx_eur = t212_fx_rates.get("GBPEUR=X", pd.Series(dtype=float))
+            # Reindex price_wide to match df_positions dates, forward-fill prices for weekends/holidays
+            price_wide = price_wide.reindex(df_positions_yahoo.index).ffill()
 
-                # Build currency map: Yahoo ticker -> currency
-                currency_map = {}
-                for t212_tk, yahoo_tk in ticker_map.items():
-                    cur = df_all_trades.loc[df_all_trades["Ticker_T212"] == t212_tk, "Currency"].iloc[0]
-                    currency_map[yahoo_tk] = cur
+            # Only use columns present in both DataFrames
+            common_tickers = df_positions_yahoo.columns.intersection(price_wide.columns)
+            # print(f"Common tickers: {common_tickers.tolist()}")
+            # print(f"Positions-only: {df_positions_yahoo.columns.difference(price_wide.columns).tolist()}")
+            # print(f"Prices-only: {price_wide.columns.difference(df_positions_yahoo.columns).tolist()}")
+            # Element-wise: quantity × unit price (GBP)
+            market_values = df_positions_yahoo[common_tickers] * price_wide[common_tickers]
+            # Sum across instruments for total portfolio value per day
+            market_values['total_value'] = market_values.sum(axis=1)
+            
+            # === plot the total portfolio value over time ===
+            fig_t212 = t212_portfolio_value_over_time(df_all_trades, market_values)
+            st.plotly_chart(fig_t212)
 
-                # ── 7. Calculate daily portfolio value in GBP ──
-                portfolio_values = []
-                for date in all_dates:
-                    total_gbp = 0.0
-                    for ytk in cumulative_holdings.columns:
-                        qty = cumulative_holdings.loc[date, ytk]
-                        if abs(qty) < 1e-9:
-                            continue
-                        price = df_prices.loc[date, ytk] if ytk in df_prices.columns and pd.notna(df_prices.loc[date, ytk]) else None
-                        if price is None:
-                            continue
-                        market_value = qty * price
-                        cur = currency_map.get(ytk, "GBP")
-                        if cur == "USD":
-                            gbp_rate = fx_usd.asof(date)
-                            if pd.notna(gbp_rate) and gbp_rate > 0:
-                                total_gbp += market_value / gbp_rate
-                        elif cur == "EUR":
-                            gbp_rate = fx_eur.asof(date)
-                            if pd.notna(gbp_rate) and gbp_rate > 0:
-                                total_gbp += market_value / gbp_rate
-                        elif cur in ("GBP", "GBX"):
-                            total_gbp += market_value / 100  # GBX pence to pounds
-                        else:
-                            total_gbp += market_value  # fallback
-                    portfolio_values.append({"Date": date, "Portfolio Value (GBP)": total_gbp})
-
-                df_t212_portfolio_history = pd.DataFrame(portfolio_values)
-                # Drop dates before the first trade (value would be 0)
-                df_t212_portfolio_history = df_t212_portfolio_history[df_t212_portfolio_history["Portfolio Value (GBP)"] > 0]
-
-                if not df_t212_portfolio_history.empty:
-                    # ── 8. Cache to JSON ──
-                    t212_cache_file = "t212_portfolio_values.json"
-                    pwd = os.path.dirname(os.path.realpath(__file__))
-                    t212_cache_path = os.path.join(pwd, t212_cache_file)
-
-                    t212_cached = {}
-                    if os.path.exists(t212_cache_path):
-                        with open(t212_cache_path, "r") as cf:
-                            t212_cached = json.load(cf)
-
-                    acct_key = str(account_id)
-                    t212_cached[acct_key] = {
-                        row["Date"].strftime("%Y-%m-%d"): row["Portfolio Value (GBP)"]
-                        for _, row in df_t212_portfolio_history.iterrows()
-                    }
-                    with open(t212_cache_path, "w") as cf:
-                        json.dump(t212_cached, cf, indent=2)
-
-                    # ── 9. Plot ──
-                    fig_t212_pv = ppw.portfolio_value_over_time(df_t212_portfolio_history, account_id)
-                    st.plotly_chart(fig_t212_pv, use_container_width=True)
-                else:
-                    st.info("Not enough data to plot portfolio value over time.")
-            else:
-                st.warning("Could not fetch any historical price data from Yahoo Finance.")
-        else:
-            st.info("No historical orders found – cannot reconstruct portfolio value history.")
 
     except Exception as e:
         st.error(f"❌ Trading 212 API Error: {e}")
