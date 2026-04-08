@@ -4,6 +4,10 @@ from trading212.t212dec import lss
 import time
 from urllib.parse import urlparse, parse_qs
 
+# this script is for debugging the positions calcuation
+# It fetches all historical orders, aggregates them by order and by fills
+# It also fetches all open positions and compares the cumulative sum of filled orders
+# then investigate the discrepancies between the two datasets to identify potential issues in the positions calculation logic.
 
 def fetch_all_paginated(api_func, label="data", delay=1.0, **kwargs):
     """Fetch all items from a paginated Trading 212 API endpoint."""
@@ -36,22 +40,39 @@ def fetch_all_paginated(api_func, label="data", delay=1.0, **kwargs):
     return all_items
 
 api_key, api_secret = lss("63246807")
-
+if api_key is None or api_secret is None:
+    raise ValueError("Failed to retrieve API credentials. Please check your passcode and t212.dat file.")
 t212 = Trading212API(api_key, api_secret)
 positions_raw = t212.get_open_positions()
 
 df_positions = pd.DataFrame(positions_raw)
+print("get_open_positions function queries an api that spit out the latest positions snapshot.")
+print(df_positions[['instrument', 'quantity']])
 
-print(df_positions)
 
+
+# calculate positions from historical orders and fills
+
+
+# The logic is to fetch all historical orders, then aggregate them by fills
 all_orders = fetch_all_paginated(t212.get_historical_orders, label="all orders", delay=10.0)
 order_aggregates = {}
+seen_fill_ids = set()  
+
 for item in all_orders:
     order = item.get("order", {})
     if order.get("status") != "FILLED":
         continue
     order_id = order.get("id")
     fill = item.get("fill", {})
+
+    fill_id = fill.get("id")
+    if fill_id and fill_id in seen_fill_ids:
+        continue # skip duplicate fills
+    if fill_id:
+        seen_fill_ids.add(fill_id)
+
+
     instrument = order.get("instrument", {})
     side = order.get("side", "")
     qty = fill.get("quantity", order.get("filledQuantity", order.get("quantity", 0)))
@@ -90,8 +111,30 @@ df_daily_trades = df_all_trades.pivot_table(
     aggfunc='sum'
 ).fillna(0)
 
-df_positions = df_daily_trades.cumsum()
+df_fill_positions = df_daily_trades.cumsum()
 
-# print last row of df_positions
 
-print(df_positions.iloc[-1])
+print(df_fill_positions.tail(2))
+
+# the logic below is to aggregate orders
+records = []
+for item in all_orders:
+    order = item['order']
+    if order.get('status') == 'FILLED':
+        records.append({
+            'id':             order['id'],
+            'type':           order['type'],
+            'ticker':         order['ticker'],
+            'quantity':       order.get('quantity'),          # None for VALUE strategy orders
+            'filledQuantity': order.get('filledQuantity'),    # None for VALUE strategy orders
+            'price':          order.get('limitPrice'),        # None for MARKET orders
+            'status':         order['status'],
+            'currency':       order['currency'],
+            'side':           order['side'],
+            'createdAt':      pd.to_datetime(order['createdAt']).date(),
+        })
+
+df_all_orders = pd.DataFrame(records).drop_duplicates(subset='id').reset_index(drop=True)
+df_order_positions = df_all_orders.pivot_table(index='ticker', values='filledQuantity', aggfunc='sum')
+print(df_order_positions)
+ 
