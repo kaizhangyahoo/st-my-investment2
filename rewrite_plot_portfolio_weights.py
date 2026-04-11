@@ -238,3 +238,66 @@ def ticker_price_chart_with_trades(df_ohlc, df_trades, ticker: str, currency: st
     )
 
     return fig
+
+
+
+
+def t212_portfolio_value_over_time(df_all_trades, market_values):
+    dates = market_values.index.normalize()  # strip time component
+    values = market_values['total_value']
+
+    fig = go.Figure()
+
+    # Portfolio value line
+    fig.add_trace(go.Scatter(
+        x=dates, y=values,
+        mode='lines',
+        name='Portfolio Value (GBP)',
+        line=dict(color='royalblue', width=2),
+    ))
+
+    # Trade markers — look up portfolio value on each trade date
+    buys = df_all_trades[df_all_trades['Side'] == 'BUY']
+    sells = df_all_trades[df_all_trades['Side'] == 'SELL']
+
+    for label, subset, color, symbol in [
+        ('Buy',  buys,  'green', 'triangle-up'),
+        ('Sell', sells, 'red',   'triangle-down'),
+    ]:
+        # Match trade dates to portfolio value; skip if date not in index
+        trade_dates = subset['Date'].dt.normalize()
+        matched_values = market_values['total_value'].reindex(trade_dates).dropna()
+
+        if not matched_values.empty:
+            # Build hover text
+            hover = []
+            for d in matched_values.index:
+                trades_on_date = subset[subset['Date'].dt.normalize() == d]
+                parts = [f"{row['Ticker_T212']}: {abs(row['Signed_Qty']):.2f} @ {row['Price']:.2f}"
+                        for _, row in trades_on_date.iterrows()]
+                hover.append(f"{label}<br>{d.strftime('%Y-%m-%d')}<br>" + "<br>".join(parts))
+
+            fig.add_trace(go.Scatter(
+                x=matched_values.index.normalize(),
+                y=matched_values.values,
+                mode='markers',
+                name=label,
+                marker=dict(color=color, size=10, symbol=symbol, line=dict(width=1, color='white')),
+                text=hover,
+                hoverinfo='text+y',
+            ))
+
+    fig.update_layout(
+        title='Portfolio Value Over Time',
+        xaxis_title='Date',
+        yaxis_title='Value (GBP)',
+        xaxis=dict(tickformat='%Y-%m-%d'),
+        yaxis=dict(tickprefix='£', tickformat=',.0f'),
+        hovermode='closest',
+        template='plotly_dark',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+    )
+
+    return fig
+
+    

@@ -70,5 +70,12 @@
   "Gilead Sciences Inc (24 Hours)": "GILD",
   "Synopsys Inc (24 Hours)": "SNPS",
   "Unity Software Inc (24 Hours)": "U",
-  "Barrick Mining Corporation (24 Hours)": "B"
+  "Barrick Mining Corporation (24 Hours)": "B",
+  "Blackstone Group LP (24 Hours)": "BX",
+  "CNX1_EQ": "CNX1.L",
+  "TRI_US_EQ": "TRI",
+  "AMZN_US_EQ": "AMZN",
+  "COPAl_EQ": "COPA.L",
+  "VDSTl_EQ": "VDST.L",
+  "SLVPl_EQ": "SLVP.L"
 }
