@@ -63,6 +63,67 @@ def get_historical_fx(start_date: str):
     return fx_data
 
 
+def calculate_benchmark_value(df_ohlc: pd.DataFrame, df_cash_in: pd.DataFrame) -> pd.DataFrame:
+    """Simulate buying an index with each cash deposit and track the value over time.
+
+    For each cash-in event, we buy units of the index at the next available
+    trading day's close price (date + 1). Then for every subsequent trading day,
+    the benchmark portfolio value = cumulative_units * close_price.
+
+    Args:
+        df_ohlc: OHLC DataFrame from yahooDataV8() with columns ['Date', 'close']
+        df_cash_in: DataFrame with columns ['TextDate', 'PL Amount']
+
+    Returns:
+        DataFrame with columns ['Date', 'Value'] or empty DataFrame if no data
+    """
+    df_b = df_ohlc.reset_index(drop=True).copy()
+    df_b['Date'] = pd.to_datetime(df_b['Date'])
+    df_b = df_b.sort_values('Date').reset_index(drop=True)
+    if df_b.empty:
+        return pd.DataFrame(columns=['Date', 'Value'])
+
+    cash_events = df_cash_in[['TextDate', 'PL Amount']].copy()
+    cash_events['TextDate'] = pd.to_datetime(cash_events['TextDate'])
+    cash_events = cash_events.sort_values('TextDate')
+
+    # For each cash-in, find the next trading day and calculate units bought
+    units_schedule = []  # list of (effective_date, units)
+    for _, row in cash_events.iterrows():
+        deposit_date = row['TextDate']
+        amount = row['PL Amount']
+        if amount <= 0:
+            continue
+        next_day = deposit_date + pd.Timedelta(days=1)
+        eligible = df_b[df_b['Date'] >= next_day]
+        if eligible.empty:
+            continue
+        buy_price = eligible.iloc[0]['close']
+        if buy_price and buy_price > 0:
+            units = amount / buy_price
+            units_schedule.append((eligible.iloc[0]['Date'], units))
+
+    if not units_schedule:
+        return pd.DataFrame(columns=['Date', 'Value'])
+
+    # Build daily benchmark portfolio value
+    units_schedule.sort(key=lambda x: x[0])
+    benchmark_values = []
+    cumulative_units = 0.0
+    schedule_idx = 0
+
+    for _, brow in df_b.iterrows():
+        date = brow['Date']
+        close = brow['close']
+        while schedule_idx < len(units_schedule) and units_schedule[schedule_idx][0] <= date:
+            cumulative_units += units_schedule[schedule_idx][1]
+            schedule_idx += 1
+        if cumulative_units > 0 and close is not None and not np.isnan(close):
+            benchmark_values.append({'Date': date, 'Value': cumulative_units * close})
+
+    return pd.DataFrame(benchmark_values) if benchmark_values else pd.DataFrame(columns=['Date', 'Value'])
+
+
 # copilot generated code for ticker holding period
 def symbol_trading_summary(df_trade_history):
     df = df_trade_history.copy()
@@ -569,6 +630,29 @@ if uploaded_file is not None:
             st.write(net_cashflow)
             fig = ppw.plot_cashflow(net_cashflow)
             st.plotly_chart(fig, width="stretch")
+
+            # ============ PORTFOLIO vs BENCHMARKS (S&P 500 / Nasdaq 100) ============
+            try:
+                if df_portfolio_history is not None and not df_portfolio_history.empty:
+                    st.subheader("Portfolio vs Benchmarks")
+                    benchmark_start = min(df_cashIn['TextDate']).strftime('%Y-%m-%d')
+                    benchmark_values = {}
+                    try:
+                        sp500_ohlc = OHLC_YahooFinance("^SPX", benchmark_start).yahooDataV8()
+                        benchmark_values['S&P 500'] = calculate_benchmark_value(sp500_ohlc, df_cashIn)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not fetch S&P 500 data: {e}")
+                    try:
+                        nasdaq100_ohlc = OHLC_YahooFinance("^NDX", benchmark_start).yahooDataV8()
+                        benchmark_values['Nasdaq 100'] = calculate_benchmark_value(nasdaq100_ohlc, df_cashIn)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not fetch Nasdaq 100 data: {e}")
+
+                    if benchmark_values:
+                        fig_benchmark = ppw.portfolio_vs_benchmarks(df_portfolio_history, benchmark_values)
+                        st.plotly_chart(fig_benchmark, width="stretch")
+            except NameError:
+                pass  # df_portfolio_history not available (Trade file not uploaded)
 
 
 

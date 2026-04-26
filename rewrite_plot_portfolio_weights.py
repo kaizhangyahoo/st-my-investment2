@@ -1,6 +1,7 @@
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import pandas as pd
 
 def plot_portfolio_weights(df, weights: list, exchange_rate: dict):
     company_list = df['Market']
@@ -301,3 +302,78 @@ def t212_portfolio_value_over_time(df_all_trades, market_values):
     return fig
 
     
+
+
+def portfolio_vs_benchmarks(df_portfolio, benchmark_values: dict):
+    """Plot portfolio value vs pre-calculated benchmark simulations.
+
+    Args:
+        df_portfolio: DataFrame with columns ['Date', 'Portfolio Value (GBP)']
+        benchmark_values: dict of {label: DataFrame} where each DF has ['Date', 'Value']
+    """
+    fig = go.Figure()
+
+    # ── Portfolio line (actual £ values) ──
+    df_p = df_portfolio.sort_values('Date').copy()
+    df_p['Date'] = pd.to_datetime(df_p['Date'])
+
+    fig.add_trace(go.Scatter(
+        x=df_p['Date'], y=df_p['Portfolio Value (GBP)'],
+        mode='lines',
+        name='My Portfolio',
+        line=dict(color='#00E676', width=3),
+        hovertemplate='%{x|%Y-%m-%d}<br>£%{y:,.0f}<extra>My Portfolio</extra>',
+    ))
+
+    # ── Benchmark lines ──
+    benchmark_colors = {
+        'S&P 500':    '#64B5F6',
+        'Nasdaq 100': '#FF7043',
+    }
+    fallback_colors = ['#AB47BC', '#26C6DA', '#FFCA28', '#EF5350']
+    color_idx = 0
+
+    for label, df_bench_val in benchmark_values.items():
+        if df_bench_val is None or df_bench_val.empty:
+            continue
+
+        color = benchmark_colors.get(label, fallback_colors[color_idx % len(fallback_colors)])
+        color_idx += 1
+
+        fig.add_trace(go.Scatter(
+            x=df_bench_val['Date'], y=df_bench_val['Value'],
+            mode='lines',
+            name=f'If bought {label}',
+            line=dict(color=color, width=2, dash='dot'),
+            hovertemplate='%{x|%Y-%m-%d}<br>£%{y:,.0f}<extra>' + label + '</extra>',
+        ))
+
+    # ── Layout ──
+    fig.update_layout(
+        title={
+            'text': '<b>PORTFOLIO vs "WHAT IF" BENCHMARKS</b>',
+            'y': 0.96, 'x': 0.5,
+            'xanchor': 'center', 'yanchor': 'top',
+            'font': {'size': 20, 'color': '#F4D03F'},
+        },
+        plot_bgcolor='#1a1a2e',
+        paper_bgcolor='#1a1a2e',
+        font=dict(family='Arial, sans-serif', color='#E0E0E0'),
+        hovermode='x unified',
+        legend=dict(
+            orientation='h', yanchor='bottom', y=1.02,
+            xanchor='right', x=1,
+            font=dict(size=13, color='#FFFFFF'),
+            bgcolor='rgba(40, 40, 70, 0.85)',
+            bordercolor='rgba(255, 255, 255, 0.3)',
+            borderwidth=1,
+        ),
+        margin=dict(t=80, b=50, l=60, r=30),
+        height=550,
+        xaxis=dict(gridcolor='rgba(255,255,255,0.08)', showgrid=True,
+                   title='Date'),
+        yaxis=dict(gridcolor='rgba(255,255,255,0.08)', showgrid=True,
+                   title='Value (£)', tickprefix='£', tickformat=',.0f'),
+    )
+
+    return fig
