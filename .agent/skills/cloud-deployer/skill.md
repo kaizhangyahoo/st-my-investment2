@@ -16,7 +16,7 @@ Identify the main Streamlit entry point, containerize it, and deploy to GCP Clou
 
 ## 2. Environment Verification
 - Check if `terraform` is installed via `which terraform`.
-- If missing, suggest: `brew install terraform`.
+- If missing, suggest: `brew install terraform` or `winget install HashiCorp.Terraform` or `choco install terraform` depends on the OS and whats installed.
 - Verify GCP Project: `gcloud config get-value project`.
 
 ## 3. Deployment Artifacts

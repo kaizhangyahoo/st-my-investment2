@@ -9,3 +9,4 @@ ig/ig_positions.py
 .chatledger/*
 .env
 .DS_Store
+trading212/*.csv
