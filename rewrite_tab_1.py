@@ -450,12 +450,18 @@ if uploaded_file is not None:
                     df_trades_for_chart['Price'] = pd.to_numeric(df_trades_for_chart['Price'], errors='coerce')
                     df_trades_for_chart['Quantity'] = pd.to_numeric(df_trades_for_chart['Quantity'], errors='coerce').abs()
 
-                    # IG quotes prices in pence/cents; Yahoo returns in pounds/dollars.
-                    # Auto-detect and normalise: if median trade price is ~100x median close, divide by 100.
-                    median_trade = df_trades_for_chart['Price'].median()
-                    median_close = df_ohlc['close'].median()
-                    if median_close > 0 and 50 < (median_trade / median_close) < 200:
-                        df_trades_for_chart['Price'] = df_trades_for_chart['Price'] / 100
+                    # IG quotes prices in pence/cents and are NOT split-adjusted;
+                    # Yahoo returns split-adjusted data in pounds/dollars.
+                    # Per-trade normalisation: compare each trade's price to the nearest
+                    # Yahoo close and divide by the rounded ratio. This simultaneously
+                    # handles cents→dollars conversion AND stock-split discrepancies.
+                    for idx, row in df_trades_for_chart.iterrows():
+                        nearest_idx = (df_ohlc['Date'] - row['Date']).abs().idxmin()
+                        nearest_close = df_ohlc.loc[nearest_idx, 'close']
+                        if nearest_close > 0 and row['Price'] > 0:
+                            ratio = row['Price'] / nearest_close
+                            if ratio > 5:
+                                df_trades_for_chart.at[idx, 'Price'] = row['Price'] / round(ratio)
 
                     trade_currency = df_ticker_trade_history['Currency'].iloc[0] if not df_ticker_trade_history.empty else ''
                     fig_ticker = ppw.ticker_price_chart_with_trades(
