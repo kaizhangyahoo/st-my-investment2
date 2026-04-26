@@ -304,20 +304,13 @@ def t212_portfolio_value_over_time(df_all_trades, market_values):
     
 
 
-def portfolio_vs_benchmarks(df_portfolio, benchmarks: dict, df_cash_in):
-    """Plot portfolio value vs simulated benchmark investment using the same cash deposits.
-
-    For each benchmark, we simulate buying the index with each cash-in amount
-    on the next available trading day, then track the total value of all
-    accumulated units over time.
+def portfolio_vs_benchmarks(df_portfolio, benchmark_values: dict):
+    """Plot portfolio value vs pre-calculated benchmark simulations.
 
     Args:
         df_portfolio: DataFrame with columns ['Date', 'Portfolio Value (GBP)']
-        benchmarks: dict of {label: DataFrame} where each DF has ['Date', 'close']
-        df_cash_in: DataFrame with columns ['TextDate', 'PL Amount'] (cash deposit events)
+        benchmark_values: dict of {label: DataFrame} where each DF has ['Date', 'Value']
     """
-    import numpy as np
-
     fig = go.Figure()
 
     # ── Portfolio line (actual £ values) ──
@@ -332,12 +325,7 @@ def portfolio_vs_benchmarks(df_portfolio, benchmarks: dict, df_cash_in):
         hovertemplate='%{x|%Y-%m-%d}<br>£%{y:,.0f}<extra>My Portfolio</extra>',
     ))
 
-    # ── Prepare cash-in events ──
-    cash_events = df_cash_in[['TextDate', 'PL Amount']].copy()
-    cash_events['TextDate'] = pd.to_datetime(cash_events['TextDate'])
-    cash_events = cash_events.sort_values('TextDate')
-
-    # ── Benchmark lines (simulated investment) ──
+    # ── Benchmark lines ──
     benchmark_colors = {
         'S&P 500':    '#64B5F6',
         'Nasdaq 100': '#FF7043',
@@ -345,55 +333,9 @@ def portfolio_vs_benchmarks(df_portfolio, benchmarks: dict, df_cash_in):
     fallback_colors = ['#AB47BC', '#26C6DA', '#FFCA28', '#EF5350']
     color_idx = 0
 
-    for label, df_b in benchmarks.items():
-        df_b = df_b.reset_index(drop=True).copy()
-        df_b['Date'] = pd.to_datetime(df_b['Date'])
-        df_b = df_b.sort_values('Date').reset_index(drop=True)
-        if df_b.empty:
+    for label, df_bench_val in benchmark_values.items():
+        if df_bench_val is None or df_bench_val.empty:
             continue
-
-        # For each cash-in, find the next trading day and calculate units bought
-        units_schedule = []  # list of (effective_date, units)
-        for _, row in cash_events.iterrows():
-            deposit_date = row['TextDate']
-            amount = row['PL Amount']
-            if amount <= 0:
-                continue
-            # Find next trading day (date >= deposit_date + 1 day)
-            next_day = deposit_date + pd.Timedelta(days=1)
-            eligible = df_b[df_b['Date'] >= next_day]
-            if eligible.empty:
-                continue
-            buy_date = eligible.iloc[0]['Date']
-            buy_price = eligible.iloc[0]['close']
-            if buy_price and buy_price > 0:
-                units = amount / buy_price
-                units_schedule.append((buy_date, units))
-
-        if not units_schedule:
-            continue
-
-        # Build daily benchmark portfolio value:
-        # on each day, value = sum(units_bought_so_far) * close_price
-        units_schedule.sort(key=lambda x: x[0])
-        benchmark_values = []
-        cumulative_units = 0.0
-        schedule_idx = 0
-
-        for _, brow in df_b.iterrows():
-            date = brow['Date']
-            close = brow['close']
-            # Add any units purchased on or before this date
-            while schedule_idx < len(units_schedule) and units_schedule[schedule_idx][0] <= date:
-                cumulative_units += units_schedule[schedule_idx][1]
-                schedule_idx += 1
-            if cumulative_units > 0 and close is not None and not np.isnan(close):
-                benchmark_values.append({'Date': date, 'Value': cumulative_units * close})
-
-        if not benchmark_values:
-            continue
-
-        df_bench_val = pd.DataFrame(benchmark_values)
 
         color = benchmark_colors.get(label, fallback_colors[color_idx % len(fallback_colors)])
         color_idx += 1
