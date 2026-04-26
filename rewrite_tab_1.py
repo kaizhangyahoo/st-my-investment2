@@ -570,6 +570,29 @@ if uploaded_file is not None:
             fig = ppw.plot_cashflow(net_cashflow)
             st.plotly_chart(fig, width="stretch")
 
+            # ============ PORTFOLIO vs BENCHMARKS (S&P 500 / Nasdaq 100) ============
+            try:
+                if df_portfolio_history is not None and not df_portfolio_history.empty:
+                    st.subheader("Portfolio vs Benchmarks")
+                    benchmark_start = min(df_cashIn['TextDate']).strftime('%Y-%m-%d')
+                    benchmarks = {}
+                    try:
+                        sp500_ohlc = OHLC_YahooFinance("^SPX", benchmark_start).yahooDataV8()
+                        benchmarks['S&P 500'] = sp500_ohlc
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not fetch S&P 500 data: {e}")
+                    try:
+                        nasdaq100_ohlc = OHLC_YahooFinance("^NDX", benchmark_start).yahooDataV8()
+                        benchmarks['Nasdaq 100'] = nasdaq100_ohlc
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not fetch Nasdaq 100 data: {e}")
+
+                    if benchmarks:
+                        fig_benchmark = ppw.portfolio_vs_benchmarks(df_portfolio_history, benchmarks, df_cashIn)
+                        st.plotly_chart(fig_benchmark, width="stretch")
+            except NameError:
+                pass  # df_portfolio_history not available (Trade file not uploaded)
+
 
 
         # ============ TRADING 212 analyze manually downloaded history file ============
