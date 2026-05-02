@@ -87,32 +87,106 @@ def run(
     download_dir: Optional[str] = None,
     start_date: str = "01/01/2018",
 ):
+    def dismiss_onetrust(p: Page):
+        """Remove OneTrust cookie/privacy overlay — tries button click then JS removal."""
+        for selector in (
+            "#onetrust-accept-btn-handler",
+            "button#accept-recommended-btn-handler",
+        ):
+            try:
+                btn = p.locator(selector)
+                if btn.count() > 0 and btn.is_visible(timeout=1000):
+                    btn.click()
+                    p.wait_for_timeout(600)
+                    return
+            except Exception:
+                pass
+        for label in ("Accept all cookies", "Accept All Cookies", "Accept all", "Accept"):
+            try:
+                btn = p.locator(f'button:has-text("{label}")')
+                if btn.count() > 0 and btn.first.is_visible(timeout=500):
+                    btn.first.click()
+                    p.wait_for_timeout(600)
+                    return
+            except Exception:
+                pass
+        # Force-remove via JS as last resort
+        p.evaluate("""() => {
+            ['#onetrust-consent-sdk', '.onetrust-pc-dark-filter',
+             '#onetrust-pc-sdk', '#onetrust-banner-sdk'].forEach(sel => {
+                const el = document.querySelector(sel);
+                if (el) el.remove();
+            });
+            document.body.style.overflow = '';
+        }""")
+        p.wait_for_timeout(300)
+
     downloaded_files = []
     browser = playwright.chromium.launch(headless=True)
     context = browser.new_context()
     page = context.new_page()
     page.goto("https://www.ig.com/uk")
-    if page.get_by_role("button", name="Accept").is_visible():
-        page.get_by_role("button", name="Accept").click()
+    page.wait_for_load_state("domcontentloaded")
+    page.wait_for_timeout(2000)
+    dismiss_onetrust(page)
     page.get_by_role("link", name="Log in").click()
-    if page.get_by_role("button", name="Accept").is_visible():
-        page.get_by_role("button", name="Accept").click()
+    page.wait_for_load_state("domcontentloaded")
+    page.wait_for_timeout(2000)
+    dismiss_onetrust(page)
     page.get_by_role("textbox", name="Email/username").fill(username)
     page.get_by_role("textbox", name="Email/username").press("Tab")
     page.get_by_role("textbox", name="Password").fill(passwd)
+    dismiss_onetrust(page)
     page.get_by_role("button", name="Log in").click()
-    # check if login was successful
-    page.wait_for_timeout(5000)  # Wait for potential redirects and page load
-    try: 
-        expect(page.get_by_role("button", name="Open platform").first).to_be_visible(timeout=5000)
-    except Exception:
-        print("Login failed or platform dashboard not loaded properly", file=sys.stderr)
+    # Wait for dashboard to fully load — spinner disappears, Open platform appears
+    print(f"[DEBUG] Waiting for dashboard after login...", file=sys.stderr)
+    try:
+        # Wait up to 20s for any "Open platform" button to appear
+        page.get_by_role("button", name="Open platform").first.wait_for(timeout=20000)
+    except Exception as e:
+        page.screenshot(path="/tmp/ig_debug_login.png")
+        print(f"[DEBUG] URL: {page.url}, title: {page.title()}", file=sys.stderr)
+        print(f"[DEBUG] Screenshot: /tmp/ig_debug_login.png", file=sys.stderr)
+        print(f"Login failed — could not find 'Open platform' button: {e}", file=sys.stderr)
         context.close()
         browser.close()
         sys.exit(1)
-    page.get_by_role("button", name="Open platform").first.click()
+    all_btns = page.get_by_role("button", name="Open platform").all()
+    print(f"[DEBUG] URL: {page.url} — 'Open platform' buttons: {len(all_btns)}", file=sys.stderr)
+    # Use nth(1) for the second button (ISA platform)
+    isa_btn = page.get_by_role("button", name="Open platform").nth(1)
+    if not isa_btn.is_visible():
+        print("[DEBUG] Second 'Open platform' not visible, falling back to first", file=sys.stderr)
+        isa_btn = page.get_by_role("button", name="Open platform").first
+    isa_btn.click()
+    print(f"[DEBUG] Clicked ISA 'Open platform'", file=sys.stderr)
+    # Platform may open in a new tab — poll for up to 5s
+    for _ in range(10):
+        page.wait_for_timeout(500)
+        if len(context.pages) > 1:
+            break
+    if len(context.pages) > 1:
+        page = context.pages[-1]
+        print(f"[DEBUG] Switched to new tab — URL: {page.url}", file=sys.stderr)
+    else:
+        print(f"[DEBUG] Same tab — URL: {page.url}", file=sys.stderr)
+    # SPA never reaches networkidle — wait for the History button to appear instead
+    try:
+        page.get_by_role("button", name="History").wait_for(timeout=30000)
+    except Exception:
+        page.screenshot(path="/tmp/ig_debug_platform.png")
+        print(f"[DEBUG] Platform screenshot: /tmp/ig_debug_platform.png — URL: {page.url}", file=sys.stderr)
+        raise
     page.get_by_role("button", name="History").click()
+    print("[DEBUG] Clicked History button", file=sys.stderr)
+    # View full history may open a new tab
+    pages_before = len(context.pages)
     page.get_by_role("link", name="View full history in My IG").click()
+    page.wait_for_timeout(3000)
+    if len(context.pages) > pages_before:
+        page = context.pages[-1]
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        print(f"[DEBUG] Switched to My IG tab — URL: {page.url}", file=sys.stderr)
 
 
     if download_both:
