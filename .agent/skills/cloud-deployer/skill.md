@@ -14,13 +14,22 @@ Identify the main Streamlit entry point, containerize it, and deploy to GCP Clou
 - **User Confirmation:** If multiple files are found, ASK the user: "I found multiple Python files. Which one is your main Streamlit entry point?"
 - **Variable Storage:** Store the chosen filename as `ENTRY_POINT`.
 
-## 2. Environment Verification
+## 2. Environment & Permissions Verification
 - Check if `terraform` is installed via `which terraform`.
-- If missing, suggest: `brew install terraform` or `winget install HashiCorp.Terraform` or `choco install terraform` depends on the OS and whats installed.
-- Verify GCP Project: `gcloud config get-value project`.
+- Verify GCP Project: `PROJECT_ID=$(gcloud config get-value project)`.
+- **Verify Repository:** Check if `streamlit-repo` exists in `us-central1`. If not, create it:
+  `gcloud artifacts repositories create streamlit-repo --repository-format=docker --location=us-central1`
+- **Verify IAM:** Ensure the Compute Service Account has `roles/artifactregistry.writer`.
+  ```bash
+  PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+  gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+    --role="roles/artifactregistry.writer"
+  ```
 
 ## 3. Deployment Artifacts
 - **Dockerfile:** Generate a Dockerfile.
+  - USE `python:3.14-slim` as the base image for optimized size and compatibility.
   - USE the `ENTRY_POINT` variable: `CMD ["streamlit", "run", "${ENTRY_POINT}", "--server.port=8080", "--server.address=0.0.0.0"]`.
 - **Terraform:** Generate `main.tf` in a `./terraform` folder.
   - Enforce `region = "us-central1"` for Free Tier.
