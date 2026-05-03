@@ -796,7 +796,11 @@ if t212_api_secret:
 
         # ============ ACCOUNT SUMMARY ============
         with st.spinner("Fetching account summary..."):
-            account_summary = t212_client.get_account_summary()
+            try:
+                account_summary = t212_client.get_account_summary()
+            except Exception as e:
+                st.error(f"Failed to authenticate with Trading212 API. Please check your API Key and Secret. Error: {e}")
+                st.stop()
 
         account_id = account_summary.get("id", "N/A")
         account_currency = account_summary.get("currency", "GBP")
@@ -1072,12 +1076,57 @@ if t212_api_secret:
 
 
 
+            # ── Missing T212 Symbols Check ──
+            missing_t212 = [t for t in df_all_trades['Ticker_T212'].unique() if t not in company_name_to_ticker]
+            if missing_t212:
+                st.warning("⚠️ Some Trading 212 tickers need to be mapped to Yahoo Finance tickers before proceeding.")
+                
+                # Pre-populate with the same ticker as a default suggestion
+                resolved_t212 = {t: t for t in missing_t212}
+                
+                st.subheader("Review and edit T212 mappings:")
+                edited_t212 = {}
+                for market_name, ticker in resolved_t212.items():
+                    col1, col2, col3 = st.columns([2, 2, 1])
+                    col1.write(f"**{market_name}**")
+                    edited_ticker = col2.text_input(
+                        label="Ticker",
+                        value=ticker,
+                        key=f"t212_ticker_{market_name}",
+                        label_visibility="collapsed"
+                    )
+                    edited_t212[market_name] = edited_ticker
+                    if col3.checkbox("✓ Include", key=f"t212_include_{market_name}", value=True):
+                        pass
+
+                col_save, col_cancel = st.columns(2)
+                if col_save.button("✅ Save to company_name_to_ticker.json", key="t212_save"):
+                    confirmed_mappings = {
+                        k: v for k, v in edited_t212.items() 
+                        if v.strip() and st.session_state.get(f"t212_include_{k}", False)
+                    }
+                    if confirmed_mappings:
+                        company_name_to_ticker.update(confirmed_mappings)
+                        pwd = os.path.dirname(os.path.realpath(__file__))
+                        reference_data_json_file = pwd + '/company_name_to_ticker.json'
+                        with open(reference_data_json_file, 'w') as json_file:
+                            json.dump(company_name_to_ticker, json_file, indent=2)
+                        st.success(f"✅ Saved {len(confirmed_mappings)} new mappings!")
+                        st.rerun()
+                    else:
+                        st.error("No valid mappings to save.")
+                
+                if col_cancel.button("❌ Cancel", key="t212_cancel"):
+                    st.info("Cancelled. No changes made.")
+                
+                st.stop()  # Halt execution until mappings are resolved
+
             # ── Yahoo finance all historical data for instruments ──
             df_all_trades['Yahoo_Ticker'] = df_all_trades['Ticker_T212'].map(company_name_to_ticker)
             
             all_prices = []
 
-            for ticker in df_all_trades['Yahoo_Ticker'].unique():
+            for ticker in df_all_trades['Yahoo_Ticker'].dropna().unique():
                 df1tickrt = df_all_trades[df_all_trades['Yahoo_Ticker']== ticker]
                 startDate = min(df1tickrt['Date']).date()
                 new_data = OHLC_YahooFinance(ticker, start_date=startDate.strftime("%Y-%m-%d")).yahooDataV8()
