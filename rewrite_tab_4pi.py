@@ -3,6 +3,7 @@ import streamlit as st
 import numpy as np
 import json
 import os
+import time
 from datetime import datetime, timedelta
 from rewrite_ticker_resolution import use_sec_site
 from getEODprice import getEODpriceUK, getEODpriceUSA
@@ -51,6 +52,11 @@ def calculate_past_date(period: str) -> datetime:
     # Adjust weekend to preceding Friday
     weekend_offset = {5: 1, 6: 2}.get(past_date.weekday(), 0)
     return past_date - timedelta(days=weekend_offset)
+
+@st.cache_data(ttl=3600, show_spinner=True)
+def get_cached_t212_all_orders(api_key, api_secret):
+    client = Trading212API(api_key=api_key, api_secret=api_secret)
+    return fetch_all_paginated(client.get_historical_orders, label="all orders", delay=10.0)
 
 @st.cache_data
 def get_historical_fx(start_date: str):
