@@ -66,6 +66,68 @@ def get_historical_fx(start_date: str):
     return fx_data
 
 
+def calculate_benchmark_value(df_ohlc: pd.DataFrame, df_cash_in: pd.DataFrame) -> pd.DataFrame:
+    """Simulate buying an index with each cash deposit and track the value over time.
+
+    For each cash-in event, we buy units of the index at the next available
+    trading day's close price (date + 1). Then for every subsequent trading day,
+    the benchmark portfolio value = cumulative_units * close_price.
+
+    Args:
+        df_ohlc: OHLC DataFrame from yahooDataV8() with columns ['Date', 'close']
+        df_cash_in: DataFrame with columns ['TextDate', 'PL Amount']
+
+    Returns:
+        DataFrame with columns ['Date', 'Value'] or empty DataFrame if no data
+    """
+    df_b = df_ohlc.reset_index(drop=True).copy()
+    df_b['Date'] = pd.to_datetime(df_b['Date'])
+    df_b = df_b.sort_values('Date').reset_index(drop=True)
+    if df_b.empty:
+        return pd.DataFrame(columns=['Date', 'Value'])
+
+    cash_events = df_cash_in[['TextDate', 'PL Amount']].copy()
+    cash_events['TextDate'] = pd.to_datetime(cash_events['TextDate'])
+    cash_events = cash_events.sort_values('TextDate')
+
+    # For each cash-in, find the next trading day and calculate units bought
+    units_schedule = []  # list of (effective_date, units)
+    for _, row in cash_events.iterrows():
+        deposit_date = row['TextDate']
+        amount = row['PL Amount']
+        if amount <= 0:
+            continue
+        next_day = deposit_date + pd.Timedelta(days=1)
+        eligible = df_b[df_b['Date'] >= next_day]
+        if eligible.empty:
+            continue
+        buy_price = eligible.iloc[0]['close']
+        if buy_price and buy_price > 0:
+            units = amount / buy_price
+            units_schedule.append((eligible.iloc[0]['Date'], units))
+
+    if not units_schedule:
+        return pd.DataFrame(columns=['Date', 'Value'])
+
+    # Build daily benchmark portfolio value
+    units_schedule.sort(key=lambda x: x[0])
+    benchmark_values = []
+    cumulative_units = 0.0
+    schedule_idx = 0
+
+    for _, brow in df_b.iterrows():
+        date = brow['Date']
+        close = brow['close']
+        while schedule_idx < len(units_schedule) and units_schedule[schedule_idx][0] <= date:
+            cumulative_units += units_schedule[schedule_idx][1]
+            schedule_idx += 1
+        if cumulative_units > 0 and close is not None and not np.isnan(close):
+            benchmark_values.append({'Date': date, 'Value': cumulative_units * close})
+
+    return pd.DataFrame(benchmark_values) if benchmark_values else pd.DataFrame(columns=['Date', 'Value'])
+
+
+
 # copilot generated code for ticker holding period
 def symbol_trading_summary(df_trade_history):
     df = df_trade_history.copy()
@@ -541,9 +603,49 @@ if files_to_process:
                 for date, value in portfolio_values_dict.items()
             ]).sort_values('Date')
             
+            # --- Check for benchmarks from Transaction file if uploaded ---
+            benchmark_values = {}
+            df_cashIn_for_bench = None
+            for tmp_f in files_to_process:
+                is_tmp_string = isinstance(tmp_f, str)
+                tmp_fname = os.path.basename(tmp_f) if is_tmp_string else tmp_f.name
+                if tmp_fname.startswith("Transaction") and tmp_fname.endswith(".csv"):
+                    tmp_df = pd.read_csv(tmp_f)
+                    if not is_tmp_string:
+                        tmp_f.seek(0)
+                    tmp_df['Summary'] = tmp_df['Summary'].fillna('Cash Interest - Platform Cost')
+                    tmp_df['PL Amount'] = tmp_df['PL Amount'].astype(str).str.replace(',', '')
+                    type_dict = {'TextDate': 'datetime64[s]', 'PL Amount': 'float', 'Summary': 'category', 'Transaction type': 'category', 'Cash transaction': 'boolean', 'MarketName': 'string'}
+                    tmp_df = tmp_df.astype(type_dict)
+                    tmp_df.loc[tmp_df['MarketName'] == 'Bank Deposit', 'Summary'] = 'Cash In'
+                    df_cashIn_for_bench = tmp_df[tmp_df['Summary'] == 'Cash In']
+                    break
+            
+            if df_cashIn_for_bench is not None and not df_cashIn_for_bench.empty:
+                st.write("Compare with benchmarks:")
+                col_sp500, col_ndx = st.columns(2)
+                show_sp500 = col_sp500.checkbox("S&P 500", value=False)
+                show_ndx = col_ndx.checkbox("Nasdaq 100", value=False)
+                
+                benchmark_start = df_cashIn_for_bench['TextDate'].min().strftime('%Y-%m-%d')
+                
+                if show_sp500:
+                    try:
+                        sp500_ohlc = OHLC_YahooFinance("^SPX", benchmark_start).yahooDataV8()
+                        benchmark_values['S&P 500'] = calculate_benchmark_value(sp500_ohlc, df_cashIn_for_bench)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not fetch S&P 500 data: {e}")
+                
+                if show_ndx:
+                    try:
+                        nasdaq100_ohlc = OHLC_YahooFinance("^NDX", benchmark_start).yahooDataV8()
+                        benchmark_values['Nasdaq 100'] = calculate_benchmark_value(nasdaq100_ohlc, df_cashIn_for_bench)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not fetch Nasdaq 100 data: {e}")
 
-            fig_portfolio = ppw.portfolio_value_over_time(df_portfolio_history, account_id)
+            fig_portfolio = ppw.portfolio_value_over_time(df_portfolio_history, account_id, benchmark_values)
             st.plotly_chart(fig_portfolio, width="stretch")
+
 
             # Date Range Slider
             # today_date = datetime.now().date()
