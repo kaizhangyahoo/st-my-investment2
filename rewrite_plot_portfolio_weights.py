@@ -98,7 +98,7 @@ def plot_cashflow(net_cashflow: dict):
 
     return fig
 
-def portfolio_value_over_time(df, account_id):
+def portfolio_value_over_time(df, account_id, benchmark_values: dict = None):
     fig_portfolio = px.line(
                 df,
                 x='Date',
@@ -106,11 +106,43 @@ def portfolio_value_over_time(df, account_id):
                 title=f'Portfolio Value Over Time (Account: {account_id})',
                 labels={'Portfolio Value (GBP)': 'Value (£)'},
             )
-    fig_portfolio.update_traces(line_color='#00C853', line_width=2)
+    fig_portfolio.update_traces(name='My Portfolio', line_color='#00C853', line_width=2, showlegend=True)
+    
+    if benchmark_values:
+        benchmark_colors = {
+            'S&P 500':    '#64B5F6',
+            'Nasdaq 100': '#FF7043',
+        }
+        fallback_colors = ['#AB47BC', '#26C6DA', '#FFCA28', '#EF5350']
+        color_idx = 0
+
+        for label, df_bench_val in benchmark_values.items():
+            if df_bench_val is None or df_bench_val.empty:
+                continue
+
+            color = benchmark_colors.get(label, fallback_colors[color_idx % len(fallback_colors)])
+            color_idx += 1
+
+            fig_portfolio.add_trace(go.Scatter(
+                x=df_bench_val['Date'], y=df_bench_val['Value'],
+                mode='lines',
+                name=f'If bought {label}',
+                line=dict(color=color, width=2, dash='dot'),
+                hovertemplate='%{x|%Y-%m-%d}<br>£%{y:,.0f}<extra>' + label + '</extra>',
+            ))
+
     fig_portfolio.update_layout(
         hovermode='x unified',  
         yaxis_tickformat=',.0f',
-        yaxis_tickprefix='£'
+        yaxis_tickprefix='£',
+        legend=dict(
+            orientation='h', yanchor='bottom', y=1.02,
+            xanchor='right', x=1,
+            font=dict(size=13, color='#FFFFFF'),
+            bgcolor='rgba(40, 40, 70, 0.85)',
+            bordercolor='rgba(255, 255, 255, 0.3)',
+            borderwidth=1,
+        )
     )
     return fig_portfolio
 

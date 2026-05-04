@@ -566,8 +566,44 @@ if uploaded_file is not None:
                 for date, value in portfolio_values_dict.items()
             ]).sort_values('Date')
             
+            # --- Check for benchmarks from Transaction file if uploaded ---
+            benchmark_values = {}
+            df_cashIn_for_bench = None
+            for tmp_f in uploaded_file:
+                if tmp_f.name.startswith("Transaction") and tmp_f.name.endswith(".csv"):
+                    tmp_df = pd.read_csv(tmp_f)
+                    tmp_f.seek(0)  # Reset pointer for later processing
+                    tmp_df['Summary'] = tmp_df['Summary'].fillna('Cash Interest - Platform Cost')
+                    tmp_df['PL Amount'] = tmp_df['PL Amount'].str.replace(',', '')
+                    type_dict = {'TextDate': 'datetime64[s]', 'PL Amount': 'float', 'Summary': 'category', 'Transaction type': 'category', 'Cash transaction': 'boolean', 'MarketName': 'string'}
+                    tmp_df = tmp_df.astype(type_dict)
+                    tmp_df.loc[tmp_df['MarketName'] == 'Bank Deposit', 'Summary'] = 'Cash In'
+                    df_cashIn_for_bench = tmp_df[tmp_df['Summary'] == 'Cash In']
+                    break
+            
+            if df_cashIn_for_bench is not None and not df_cashIn_for_bench.empty:
+                st.write("Compare with benchmarks:")
+                col_sp500, col_ndx = st.columns(2)
+                show_sp500 = col_sp500.checkbox("S&P 500", value=False)
+                show_ndx = col_ndx.checkbox("Nasdaq 100", value=False)
+                
+                benchmark_start = df_cashIn_for_bench['TextDate'].min().strftime('%Y-%m-%d')
+                
+                if show_sp500:
+                    try:
+                        sp500_ohlc = OHLC_YahooFinance("^SPX", benchmark_start).yahooDataV8()
+                        benchmark_values['S&P 500'] = calculate_benchmark_value(sp500_ohlc, df_cashIn_for_bench)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not fetch S&P 500 data: {e}")
+                
+                if show_ndx:
+                    try:
+                        nasdaq100_ohlc = OHLC_YahooFinance("^NDX", benchmark_start).yahooDataV8()
+                        benchmark_values['Nasdaq 100'] = calculate_benchmark_value(nasdaq100_ohlc, df_cashIn_for_bench)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not fetch Nasdaq 100 data: {e}")
 
-            fig_portfolio = ppw.portfolio_value_over_time(df_portfolio_history, account_id)
+            fig_portfolio = ppw.portfolio_value_over_time(df_portfolio_history, account_id, benchmark_values)
             st.plotly_chart(fig_portfolio, width="stretch")
 
             # Date Range Slider
@@ -631,28 +667,6 @@ if uploaded_file is not None:
             fig = ppw.plot_cashflow(net_cashflow)
             st.plotly_chart(fig, width="stretch")
 
-            # ============ PORTFOLIO vs BENCHMARKS (S&P 500 / Nasdaq 100) ============
-            try:
-                if df_portfolio_history is not None and not df_portfolio_history.empty:
-                    st.subheader("Portfolio vs Benchmarks")
-                    benchmark_start = min(df_cashIn['TextDate']).strftime('%Y-%m-%d')
-                    benchmark_values = {}
-                    try:
-                        sp500_ohlc = OHLC_YahooFinance("^SPX", benchmark_start).yahooDataV8()
-                        benchmark_values['S&P 500'] = calculate_benchmark_value(sp500_ohlc, df_cashIn)
-                    except Exception as e:
-                        st.warning(f"⚠️ Could not fetch S&P 500 data: {e}")
-                    try:
-                        nasdaq100_ohlc = OHLC_YahooFinance("^NDX", benchmark_start).yahooDataV8()
-                        benchmark_values['Nasdaq 100'] = calculate_benchmark_value(nasdaq100_ohlc, df_cashIn)
-                    except Exception as e:
-                        st.warning(f"⚠️ Could not fetch Nasdaq 100 data: {e}")
-
-                    if benchmark_values:
-                        fig_benchmark = ppw.portfolio_vs_benchmarks(df_portfolio_history, benchmark_values)
-                        st.plotly_chart(fig_benchmark, width="stretch")
-            except NameError:
-                pass  # df_portfolio_history not available (Trade file not uploaded)
 
 
 

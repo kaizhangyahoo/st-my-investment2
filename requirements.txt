@@ -9,6 +9,4 @@ lxml
 Authlib==1.6.5
 firebase-admin
 streamlit-oauth
-playwright
-firebase_admin
 cryptography
