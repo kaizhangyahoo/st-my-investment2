@@ -391,6 +391,7 @@ if files_to_process:
             else:
                 filename_parts = f.name.split('-')
                 account_id = filename_parts[1] if len(filename_parts) > 1 else 'default'
+                f.seek(0)
                 df_trade_history = pd.read_csv(f)
             df_trade_history['Date'] = pd.to_datetime(df_trade_history['TextDate'], errors='coerce', dayfirst=True)
             
@@ -616,6 +617,8 @@ if files_to_process:
                 is_tmp_string = isinstance(tmp_f, str)
                 tmp_fname = os.path.basename(tmp_f) if is_tmp_string else tmp_f.name
                 if tmp_fname.startswith("Transaction") and tmp_fname.endswith(".csv"):
+                    if not is_tmp_string:
+                        tmp_f.seek(0)
                     tmp_df = pd.read_csv(tmp_f)
                     if not is_tmp_string:
                         tmp_f.seek(0)
@@ -702,6 +705,7 @@ if files_to_process:
             if isinstance(f, str):
                 df_transactions = pd.read_csv(f)
             else:
+                f.seek(0)
                 df_transactions = pd.read_csv(f)
             df_transactions['Summary'] = df_transactions['Summary'].fillna('Cash Interest - Platform Cost')
             type_dict = {'TextDate': 'datetime64[s]', 'PL Amount': 'float', 'Summary': 'category', 'Transaction type': 'category', 'Cash transaction': 'boolean', 'MarketName': 'string'}

@@ -353,6 +353,7 @@ if uploaded_file is not None:
             filename_parts = f.name.split('-')
             account_id = filename_parts[1] if len(filename_parts) > 1 else 'default'
             
+            f.seek(0)
             df_trade_history = pd.read_csv(f)
             df_trade_history['Date'] = pd.to_datetime(df_trade_history['TextDate'], errors='coerce', dayfirst=True)
             
@@ -571,6 +572,7 @@ if uploaded_file is not None:
             df_cashIn_for_bench = None
             for tmp_f in uploaded_file:
                 if tmp_f.name.startswith("Transaction") and tmp_f.name.endswith(".csv"):
+                    tmp_f.seek(0)  # Ensure we read from the start
                     tmp_df = pd.read_csv(tmp_f)
                     tmp_f.seek(0)  # Reset pointer for later processing
                     tmp_df['Summary'] = tmp_df['Summary'].fillna('Cash Interest - Platform Cost')
@@ -652,6 +654,7 @@ if uploaded_file is not None:
                 st.markdown(f"Value difference between {selected_date.date()} and today: **<span style='color:{'green' if diff > 0 else 'red'}'>£{diff:,.2f}</span>**", unsafe_allow_html=True)
         
         elif f.name.startswith("Transaction") and f.name.endswith(".csv"):
+            f.seek(0)
             df_transactions = pd.read_csv(f)
             df_transactions['Summary'] = df_transactions['Summary'].fillna('Cash Interest - Platform Cost')
             type_dict = {'TextDate': 'datetime64[s]', 'PL Amount': 'float', 'Summary': 'category', 'Transaction type': 'category', 'Cash transaction': 'boolean', 'MarketName': 'string'}

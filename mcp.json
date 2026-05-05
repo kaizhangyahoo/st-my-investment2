@@ -3,6 +3,10 @@
         "playwright": {
             "type": "sse",
             "url": "http://192.168.1.201:8931/sse"
+        },
+        "GCP-developer-knowledge": {
+            "command": "python3",
+            "args": ["/Users/kai/github/st-my-investment2/.agent/skills/gcp-mcp/scripts/mcp_client.py", "--stdio"]
         }
     }
 }
