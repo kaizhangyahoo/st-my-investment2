@@ -38,3 +38,8 @@ Identify the main Streamlit entry point, containerize it, and deploy to GCP Clou
 ## 4. Execution
 1. Run `gcloud builds submit --tag gcr.io/[PROJECT_ID]/streamlit-app:latest .`
 2. Run `terraform init` and `terraform apply -auto-approve`.
+
+## 5. Google Function
+- Use budget_enforcer.py as the Cloud Function.
+- Trigger this function when the cost exceeds the budget.
+- The project id is project-e29b631c-29b0-4dd7-86b and the billing account is 016809-C67163-5BE301
