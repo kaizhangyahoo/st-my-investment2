@@ -985,7 +985,7 @@ if t212_api_secret and t212_api_key:
 
             trade_rows = []
             for order_id, data in order_aggregates.items():
-                signed_qty = data["Quantity"] if data["Side"] == "BUY" else -data["Quantity"] # never sold, so won't know if this is correct
+                signed_qty = abs(data["Quantity"]) if data["Side"] == "BUY" else -abs(data["Quantity"])
                 trade_rows.append({
                     "Date": data["Date"],
                     "Ticker_T212": data["Ticker_T212"],

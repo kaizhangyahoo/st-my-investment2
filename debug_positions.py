@@ -92,7 +92,7 @@ for item in all_orders:
 
 trade_rows = []
 for order_id, data in order_aggregates.items():
-    signed_qty = data["Quantity"] if data["Side"] == "BUY" else -data["Quantity"]
+    signed_qty = abs(data["Quantity"]) if data["Side"] == "BUY" else -abs(data["Quantity"])
     trade_rows.append({
         "Date": data["Date"],
         "Ticker_T212": data["Ticker_T212"],
