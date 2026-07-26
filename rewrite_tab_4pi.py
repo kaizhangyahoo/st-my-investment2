@@ -13,6 +13,53 @@ import glob, socket, platform
 
 from trading212.t212dec import lss
 from trading212_api import Trading212API
+import re
+
+
+def t212_ticker_to_yahoo(t212_ticker: str, json_map: dict) -> str | None:
+    """Convert a Trading 212 ticker (e.g. 'AAPL_US_EQ') to a Yahoo Finance ticker.
+
+    Resolution order:
+      1. Exact match in json_map (handles edge cases like ALCC1_US_EQ → OKLO)
+      2. Auto-conversion based on known T212 naming patterns
+      3. Returns None if no conversion is possible
+    """
+    # 1. Exact lookup in the manually-curated JSON map
+    if t212_ticker in json_map:
+        return json_map[t212_ticker]
+
+    # 2. Pattern-based auto-conversion
+    #    US equities:  AAPL_US_EQ  → AAPL
+    m = re.match(r'^([A-Z0-9]+)_US_EQ$', t212_ticker)
+    if m:
+        return m.group(1)
+
+    #    London equities:  SDR_L_EQ  → SDR.L
+    m = re.match(r'^([A-Z0-9]+)_L_EQ$', t212_ticker)
+    if m:
+        return f"{m.group(1)}.L"
+
+    #    London ETFs (lowercase 'l'):  CNX1l_EQ  → CNX1.L
+    m = re.match(r'^([A-Z0-9]+)l_EQ$', t212_ticker)
+    if m:
+        return f"{m.group(1)}.L"
+
+    #    German equities:  SAP_DE_EQ  → SAP.DE
+    m = re.match(r'^([A-Z0-9]+)_DE_EQ$', t212_ticker)
+    if m:
+        return f"{m.group(1)}.DE"
+
+    #    French equities:  BNP_FR_EQ  → BNP.PA
+    m = re.match(r'^([A-Z0-9]+)_FR_EQ$', t212_ticker)
+    if m:
+        return f"{m.group(1)}.PA"
+
+    #    Generic _EQ suffix (try stripping it)
+    m = re.match(r'^([A-Z0-9]+)_EQ$', t212_ticker)
+    if m:
+        return m.group(1)
+
+    return None
 
 
 
@@ -1007,21 +1054,71 @@ if t212_api_secret and t212_api_key:
 
             df_fill_positions = df_daily_trades.cumsum()
             # st.table(df_fill_positions.tail(5))
-            if company_name_to_ticker: # TODO: if company_name_to_ticker contains all the mapping from Ticker_T212 to Yahoo_Ticker
-                df_positions_yahoo = df_fill_positions.rename(columns=company_name_to_ticker)
+            # Build a T212→Yahoo mapping for every ticker encountered in trades
+            t212_to_yahoo_map = {}
+            new_t212_mappings_to_review = {}
+
+            for t212_tkr in df_all_trades['Ticker_T212'].unique():
+                if t212_tkr in company_name_to_ticker:
+                    t212_to_yahoo_map[t212_tkr] = company_name_to_ticker[t212_tkr]
+                else:
+                    auto_yahoo = t212_ticker_to_yahoo(t212_tkr, {})
+                    if auto_yahoo:
+                        t212_to_yahoo_map[t212_tkr] = auto_yahoo
+                    new_t212_mappings_to_review[t212_tkr] = auto_yahoo
+
+            # If there are tickers not yet in company_name_to_ticker.json, display review widget
+            if new_t212_mappings_to_review:
+                with st.expander("📝 Review T212 Ticker Mappings (New or Auto-Resolved)", expanded=True):
+                    st.write("The following Trading 212 tickers were found in your trade history but are not yet saved in `company_name_to_ticker.json`:")
+                    edited_t212_symbols = {}
+                    for t212_tkr, auto_val in new_t212_mappings_to_review.items():
+                        col1, col2, col3 = st.columns([2, 2, 1])
+                        col1.write(f"**{t212_tkr}**")
+                        edited_val = col2.text_input(
+                            label="Yahoo Ticker",
+                            value=auto_val if auto_val else "",
+                            key=f"t212_mapping_{t212_tkr}",
+                            label_visibility="collapsed"
+                        )
+                        edited_t212_symbols[t212_tkr] = edited_val
+                        col3.checkbox("✓ Include", key=f"t212_include_{t212_tkr}", value=True)
+
+                    if st.button("✅ Save T212 Mappings to company_name_to_ticker.json", key="save_t212_mappings_btn"):
+                        confirmed = {
+                            k: v.strip().upper()
+                            for k, v in edited_t212_symbols.items()
+                            if v.strip() and st.session_state.get(f"t212_include_{k}", False)
+                        }
+                        if confirmed:
+                            company_name_to_ticker.update(confirmed)
+                            with open(reference_data_json_file, 'w') as jf:
+                                json.dump(company_name_to_ticker, jf, indent=2)
+                            st.success(f"✅ Saved {len(confirmed)} new T212 mappings to company_name_to_ticker.json!")
+                            st.rerun()
+
+            if t212_to_yahoo_map:
+                df_positions_yahoo = df_fill_positions.rename(columns=t212_to_yahoo_map)
             else:
-                print("company_name_to_ticker is empty, cannot rename columns, portfolio value over time will fail")
-
-
+                st.warning("Could not resolve any T212 tickers to Yahoo tickers. Portfolio value chart will be skipped.")
+                df_positions_yahoo = df_fill_positions  # fallback
 
             # ── Yahoo finance all historical data for instruments ──
-            df_all_trades['Yahoo_Ticker'] = df_all_trades['Ticker_T212'].map(company_name_to_ticker)
-            
+            df_all_trades['Yahoo_Ticker'] = df_all_trades['Ticker_T212'].map(t212_to_yahoo_map)
+
+            # Warn about any tickers that couldn't be resolved
+            unmapped_t212 = df_all_trades[df_all_trades['Yahoo_Ticker'].isna()]['Ticker_T212'].unique()
+            if len(unmapped_t212) > 0:
+                st.warning(f"⚠️ Could not resolve {len(unmapped_t212)} T212 ticker(s) to Yahoo format: {', '.join(unmapped_t212)}. "
+                           "These will be excluded from the portfolio value chart.")
+
+            # Filter to only resolved tickers for the price loop
+            df_resolved_trades = df_all_trades[df_all_trades['Yahoo_Ticker'].notna()]
             all_prices = []
 
-            for ticker in df_all_trades['Yahoo_Ticker'].unique():
-                df1tickrt = df_all_trades[df_all_trades['Yahoo_Ticker']== ticker]
-                startDate = min(df1tickrt['Date']).date()
+            for ticker in df_resolved_trades['Yahoo_Ticker'].unique():
+                df1tickrt = df_resolved_trades[df_resolved_trades['Yahoo_Ticker'] == ticker]
+                startDate = df1tickrt['Date'].min().date()
                 new_data = OHLC_YahooFinance(ticker, start_date=startDate.strftime("%Y-%m-%d")).yahooDataV8()
                 new_data['ticker'] = ticker
                 all_prices.append(new_data)
@@ -1029,11 +1126,14 @@ if t212_api_secret and t212_api_key:
             price_data = pd.concat(all_prices, ignore_index=True) # Combine everything at once
             price_data = price_data[['ticker', 'Date', 'close']]
             price_data['Date'] = pd.to_datetime(price_data['Date'])
-            price_data['Currency'] = price_data['ticker'].map(lambda x: df_all_trades[df_all_trades['Yahoo_Ticker'] == x]['Currency'].iloc[0])
+            price_data['Currency'] = price_data['ticker'].map(lambda x: df_resolved_trades[df_resolved_trades['Yahoo_Ticker'] == x]['Currency'].iloc[0])
 
             # get FX rate by checking if GBPUSD and GBPEUR variables already ready and waiting
-            if 'GBPUSD' not in locals() or min(GBPUSD.index) <= price_data[price_data['Currency'] == 'USD']['Date'].min(): # TO_TEST, and GBPUSD only for now
-                GBPUSD = get_historical_fx(price_data[price_data['Currency'] == 'USD']['Date'].min().strftime("%Y-%m-%d"))['GBPUSD=X']
+            usd_prices = price_data[price_data['Currency'] == 'USD']
+            if not usd_prices.empty:
+                usd_min_date = usd_prices['Date'].min()
+                if 'GBPUSD' not in locals() or min(GBPUSD.index) <= usd_min_date: # TO_TEST, and GBPUSD only for now
+                    GBPUSD = get_historical_fx(usd_min_date.strftime("%Y-%m-%d"))['GBPUSD=X']
             
             price_data['GBP_Close'] = price_data.apply(lambda row: row['close'] / GBPUSD.asof(row['Date']) if row['Currency'] == 'USD' else row['close']/100 if row['Currency'] == 'GBX' else row['close'], axis=1)
             
