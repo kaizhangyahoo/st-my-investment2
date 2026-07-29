@@ -73,6 +73,10 @@ class OHLC_YahooFinance:
         dates = p['chart']['result'][0]['timestamp']
         ohlc_df = pd.DataFrame.from_dict(ohlc_json)
 
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in ohlc_df.columns:
+                ohlc_df[col] = pd.to_numeric(ohlc_df[col], errors='coerce')
+
         if self.interval == "1d":
             ohlc_df['Date'] = [datetime.fromtimestamp(x).date() for x in dates]
         else:

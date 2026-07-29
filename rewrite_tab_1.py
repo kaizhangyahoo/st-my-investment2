@@ -78,7 +78,11 @@ def calculate_benchmark_value(df_ohlc: pd.DataFrame, df_cash_in: pd.DataFrame) -
         DataFrame with columns ['Date', 'Value'] or empty DataFrame if no data
     """
     df_b = df_ohlc.reset_index(drop=True).copy()
+    if df_b.empty or 'close' not in df_b.columns:
+        return pd.DataFrame(columns=['Date', 'Value'])
+
     df_b['Date'] = pd.to_datetime(df_b['Date'])
+    df_b['close'] = pd.to_numeric(df_b['close'], errors='coerce')
     df_b = df_b.sort_values('Date').reset_index(drop=True)
     if df_b.empty:
         return pd.DataFrame(columns=['Date', 'Value'])
@@ -95,11 +99,11 @@ def calculate_benchmark_value(df_ohlc: pd.DataFrame, df_cash_in: pd.DataFrame) -
         if amount <= 0:
             continue
         next_day = deposit_date + pd.Timedelta(days=1)
-        eligible = df_b[df_b['Date'] >= next_day]
+        eligible = df_b[(df_b['Date'] >= next_day) & df_b['close'].notna() & (df_b['close'] > 0)]
         if eligible.empty:
             continue
         buy_price = eligible.iloc[0]['close']
-        if buy_price and buy_price > 0:
+        if pd.notna(buy_price) and buy_price > 0:
             units = amount / buy_price
             units_schedule.append((eligible.iloc[0]['Date'], units))
 
@@ -118,7 +122,7 @@ def calculate_benchmark_value(df_ohlc: pd.DataFrame, df_cash_in: pd.DataFrame) -
         while schedule_idx < len(units_schedule) and units_schedule[schedule_idx][0] <= date:
             cumulative_units += units_schedule[schedule_idx][1]
             schedule_idx += 1
-        if cumulative_units > 0 and close is not None and not np.isnan(close):
+        if cumulative_units > 0 and pd.notna(close):
             benchmark_values.append({'Date': date, 'Value': cumulative_units * close})
 
     return pd.DataFrame(benchmark_values) if benchmark_values else pd.DataFrame(columns=['Date', 'Value'])

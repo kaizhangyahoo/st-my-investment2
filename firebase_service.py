@@ -1,1 +1,0 @@
-.agent/skills/users-login-record-firebase/scripts/firebase_service.py
