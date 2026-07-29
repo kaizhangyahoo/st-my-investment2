@@ -222,8 +222,10 @@ def calculate_portfolio_value_on_date(
     df_trade_history: pd.DataFrame,
     df_market_historical_data: pd.DataFrame,
     fx_rates: dict  # {'GBPUSD': pd.Series, 'GBPEUR': pd.Series}
-) -> float:
+):
     """Calculate total portfolio value in GBP for a specific date.
+    
+    Returns None if price data for any active position is missing or NaN.
     
     Args:
         target_date: The date to calculate portfolio value for
@@ -232,7 +234,7 @@ def calculate_portfolio_value_on_date(
         fx_rates: Dict with 'GBPUSD' and 'GBPEUR' as pd.Series with date index
     
     Returns:
-        Total portfolio value in GBP as float
+        Total portfolio value in GBP as float, or None if incomplete data
     """
     # Calculate positions on the target date
     df_trades_until_date = df_trade_history[df_trade_history['Date'] <= target_date]
@@ -254,9 +256,24 @@ def calculate_portfolio_value_on_date(
     # Merge positions with market data
     df_positions = pd.merge(df_positions, df_market_on_date, on='Ticker', how='left')
     
+    # If any active position is missing close price data or close is NaN, cannot calculate total value
+    if 'close' not in df_positions.columns:
+        missing_tickers = df_positions['Ticker'].tolist()
+        print(f"Skipping {target_date_normalized}: 'close' column missing for ticker(s) {missing_tickers}")
+        return None
+    elif df_positions['close'].isna().any():
+        missing_tickers = df_positions[df_positions['close'].isna()]['Ticker'].tolist()
+        print(f"Skipping {target_date_normalized}: missing close price for ticker(s) {missing_tickers}")
+        return None
+    
     # Get FX rates for the date
     usd_rate = fx_rates['GBPUSD'].asof(target_date)
     eur_rate = fx_rates['GBPEUR'].asof(target_date)
+    
+    if pd.isna(usd_rate) or pd.isna(eur_rate):
+        missing_fx = [k for k, v in [('GBPUSD', usd_rate), ('GBPEUR', eur_rate)] if pd.isna(v)]
+        print(f"Skipping {target_date_normalized}: missing FX rate(s) {missing_fx}")
+        return None
     
     # Calculate GBP value for each position
     df_positions['GBP_Value'] = 0.0
@@ -270,7 +287,12 @@ def calculate_portfolio_value_on_date(
         df_positions['Quantity'] * df_positions['close'] / 100  # pence to pounds
     )
     
-    return df_positions['GBP_Value'].sum()
+    if df_positions['GBP_Value'].isna().any():
+        missing_tickers = df_positions[df_positions['GBP_Value'].isna()]['Ticker'].tolist()
+        print(f"Skipping {target_date_normalized}: missing GBP_Value for ticker(s) {missing_tickers}")
+        return None
+    
+    return float(df_positions['GBP_Value'].sum())
 
 
 def get_portfolio_value_history(
@@ -321,6 +343,7 @@ def get_portfolio_value_history(
     # Calculate values for missing dates
     if dates_to_calculate:
         print(f"Calculating portfolio values for {len(dates_to_calculate)} new dates...")
+        updated = False
         for date in dates_to_calculate:
             # Convert to datetime for the calculation function
             target_date = pd.Timestamp(date)
@@ -330,13 +353,16 @@ def get_portfolio_value_history(
                 df_market_historical_data=df_market_historical_data,
                 fx_rates=fx_rates
             )
-            account_cache[str(date)] = value
+            if value is not None and not pd.isna(value):
+                account_cache[str(date)] = value
+                updated = True
         
-        # Save updated cache
-        all_accounts_cache[account_id] = account_cache
-        with open(cache_path, 'w') as f:
-            json.dump(all_accounts_cache, f, indent=2)
-        print(f"Saved portfolio values to {cache_path}")
+        # Save updated cache if any date was added
+        if updated:
+            all_accounts_cache[account_id] = account_cache
+            with open(cache_path, 'w') as f:
+                json.dump(all_accounts_cache, f, indent=2)
+            print(f"Saved portfolio values to {cache_path}")
     
     return account_cache
 
@@ -642,8 +668,8 @@ if files_to_process:
             st.subheader("Portfolio Value Over Time")
             
             # Get historical market data and FX rates for the chart
-            market_data_collections = symbol_trading_summary(df_trade_history_not_null)
-            df_market_historical_data = historical_market_data_yahoo(market_data_collections, df_trade_history_not_null)
+            market_data_collections = symbol_trading_summary(df_trade_history_ticker_updated)
+            df_market_historical_data = historical_market_data_yahoo(market_data_collections, df_trade_history_ticker_updated)
             df_market_historical_data['Date'] = pd.to_datetime(df_market_historical_data['Date']).dt.date
             fx_rates = {'GBPUSD': GBPUSD, 'GBPEUR': GBPEUR}
             
@@ -742,15 +768,18 @@ if files_to_process:
             
             if selected_date:
                 Total_value_in_GBP_selected_date = calculate_portfolio_value_on_date(
-                target_date=selected_date,
-                df_trade_history=df_trade_history_ticker_updated,
-                df_market_historical_data=df_market_historical_data,
-                fx_rates=fx_rates
+                    target_date=selected_date,
+                    df_trade_history=df_trade_history_ticker_updated,
+                    df_market_historical_data=df_market_historical_data,
+                    fx_rates=fx_rates
                 )
                 
-                diff = Total_market_value_gbp - Total_value_in_GBP_selected_date
-                st.markdown(f"Total value in GBP on {selected_date.date()}: **£{Total_value_in_GBP_selected_date:,.2f}**, value today: **£{Total_market_value_gbp:,.2f}**")
-                st.markdown(f"Value difference between {selected_date.date()} and today: **<span style='color:{'green' if diff > 0 else 'red'}'>£{diff:,.2f}</span>**", unsafe_allow_html=True)
+                if Total_value_in_GBP_selected_date is not None and not pd.isna(Total_value_in_GBP_selected_date):
+                    diff = Total_market_value_gbp - Total_value_in_GBP_selected_date
+                    st.markdown(f"Total value in GBP on {selected_date.date()}: **£{Total_value_in_GBP_selected_date:,.2f}**, value today: **£{Total_market_value_gbp:,.2f}**")
+                    st.markdown(f"Value difference between {selected_date.date()} and today: **<span style='color:{'green' if diff > 0 else 'red'}'>£{diff:,.2f}</span>**", unsafe_allow_html=True)
+                else:
+                    st.warning(f"Could not calculate portfolio value on {selected_date.date()} because market price data is missing for one or more open positions.")
         
         elif (isinstance(f, str) and os.path.basename(f).startswith("Transaction") and f.endswith(".csv")) or (not isinstance(f, str) and f.name.startswith("Transaction") and f.name.endswith(".csv")):
             if isinstance(f, str):

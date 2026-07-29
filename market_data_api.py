@@ -171,9 +171,11 @@ class HistoricalMarketData:
         ticker_trades = ticker_trades.sort_values(by='Date').reset_index(drop=True)
         
         rows = []
+        price_col = 'Price' if 'Price' in ticker_trades.columns else ('Price / share' if 'Price / share' in ticker_trades.columns else ('Price / Share' if 'Price / Share' in ticker_trades.columns else None))
         for i in range(len(ticker_trades) - 1):
             start_date, end_date = ticker_trades.at[i, 'Date'], ticker_trades.at[i + 1, 'Date']
-            start_price, end_price = ticker_trades.at[i, 'Price'], ticker_trades.at[i + 1, 'Price']
+            start_price = ticker_trades.at[i, price_col] if price_col else 0.0
+            end_price = ticker_trades.at[i + 1, price_col] if price_col else 0.0
             business_days = pd.bdate_range(start=start_date, end=end_date)
             prices = np.linspace(start_price, end_price, num=len(business_days))
 
@@ -213,5 +215,5 @@ if __name__ == "__main__":
     # print(finage.sp500_change_by_sector())
     # if finage.err_results:
     #     print("Error: ", finage.err_results)
-    payp = OHLC_YahooFinance("AFX.DE", "2025-12-24")
+    payp = OHLC_YahooFinance("FIRY", "2026-07-20")
     print(payp.yahooDataV8())
