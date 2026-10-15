@@ -151,6 +151,8 @@ def getEODpriceFromEODHD(symbol_or_symbols, api_token: str = None):
         ticker = symbol.strip()
         if ticker.endswith('.L'):
             ticker = ticker[:-2] + '.LSE'
+        elif ticker.endswith('.DE'):
+            ticker = ticker[:-2] + 'XETRA'
 
         url = f"https://eodhd.com/api/real-time/{ticker}?api_token={token}&fmt=json"
         try:
@@ -166,7 +168,7 @@ def getEODpriceFromEODHD(symbol_or_symbols, api_token: str = None):
                         return float(prev_close)
             elif response.status_code == 402:
                 print(f"EODHD daily request limit exceeded (402) for {ticker}: {response.text.strip()}")
-                return getEODpriceUK(ticker)
+                return getEODpriceUK([symbol])
             else:
                 print(f"EODHD status {response.status_code} for {ticker}: {response.text.strip()}")
         except Exception as e:
@@ -193,7 +195,7 @@ def getEODpriceFromEODHD(symbol_or_symbols, api_token: str = None):
 
 
 def main():
-    L1 = ['SDR.L', 'RR.L']
+    L1 = ['AFX.DE']
     print("--- Testing getEODpriceFromEODHD ---")
     for sym in L1:
         price = getEODpriceFromEODHD(sym)
