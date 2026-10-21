@@ -148,8 +148,42 @@ class HistoricalMarketData:
         result = pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
         return result.rename(columns={'ticker': 'Ticker'})
     
+    def _get_eodhd_single_price(self, ticker: str):
+        """Fetch latest price for a ticker from EODHD."""
+        try:
+            from getEODprice import getEODpriceFromEODHD
+            query_sym = ticker
+            if '.' not in query_sym:
+                query_sym = f"{query_sym}.US"
+            return getEODpriceFromEODHD(query_sym)
+        except Exception as e:
+            print(f"Error getting EODHD price for {ticker}: {e}")
+            return None
+
+    def _fetch_eodhd_synthetic_data(self, ticker: str, start_date, end_date=None) -> pd.DataFrame:
+        """Fetch latest price from EODHD and build synthetic daily OHLC rows up to end_date."""
+        import numpy as np
+        price = self._get_eodhd_single_price(ticker)
+        if price is None:
+            return pd.DataFrame()
+
+        start_dt = pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date) if end_date else pd.to_datetime('today')
+        business_days = pd.bdate_range(start=start_dt, end=end_dt)
+
+        df = pd.DataFrame({
+            "Date": business_days,
+            "open": np.nan,
+            "high": np.nan,
+            "low": np.nan,
+            "close": price,
+            "volume": 0,
+            "ticker": ticker
+        })
+        return df
+
     def _fetch_ticker_data(self, ticker: str, start_date, end_date) -> pd.DataFrame:
-        """Fetch data for a single ticker, falling back to synthetic if Yahoo fails."""
+        """Fetch data for a single ticker, falling back to EODHD or synthetic if Yahoo fails."""
         try:
             start_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
             end_str = end_date.strftime('%Y-%m-%d') if end_date and hasattr(end_date, 'strftime') else None
@@ -158,9 +192,25 @@ class HistoricalMarketData:
                     if end_str else OHLC_YahooFinance(ticker, start_str).yahooDataV8())
             data['Date'] = pd.to_datetime(data['Date'])
             data['ticker'] = ticker
+
+            # Fix trailing/intermittent NaNs (e.g. halted/acquired stocks like SDR.L, ATKR)
+            if 'close' in data.columns and data['close'].isna().any():
+                data['close'] = data['close'].ffill()
+
+                # If still NaN at start or entirely, fill with EODHD price
+                if data['close'].isna().any():
+                    eodhd_price = self._get_eodhd_single_price(ticker)
+                    if eodhd_price is not None:
+                        data['close'] = data['close'].fillna(eodhd_price)
+
             return data
         except Exception as e:
-            print(f"Yahoo data unavailable for {ticker}: {e}. Using synthetic data.")
+            print(f"Yahoo data unavailable for {ticker}: {e}. Trying EODHD synthetic fallback.")
+            eodhd_df = self._fetch_eodhd_synthetic_data(ticker, start_date, end_date)
+            if not eodhd_df.empty:
+                return eodhd_df
+
+            print(f"EODHD unavailable for {ticker}. Using trade history synthetic data.")
             return self._generate_synthetic_data(ticker)
     
     def _generate_synthetic_data(self, ticker: str) -> pd.DataFrame:
