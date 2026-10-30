@@ -125,18 +125,87 @@ def getEODpriceISIN(isin_list : list) -> dict:
     return eod_isin_price
 
 
-            
+def getEODpriceFromEODHD(symbol_or_symbols, api_token: str = None):
+    """
+    Fetch the last price of a symbol (or list of symbols) from EODHD.
+    Automatically maps London Stock Exchange suffixes (.L -> .LSE).
+    Uses real-time endpoint (with previousClose fallback for halted/delisted stocks)
+    and falls back to EOD historical if needed.
+    if failed to get price from EODHD, try to get from yahoo finance getEODpriceUK.
+    """
+    token = api_token
+    if not token:
+        try:
+            token = st.secrets.get("api_keys", {}).get("eodhd")
+        except Exception as e:
+            print(f"Failed to access st.secrets: {e}")
+            token = None
 
-        
+    if not token:
+        print("EODHD API token not found in st.secrets['api_keys']['eodhd'].")
+        if isinstance(symbol_or_symbols, (list, tuple, set)):
+            return {s: None for s in symbol_or_symbols}
+        return None
 
+    def _fetch_single(symbol: str):
+        ticker = symbol.strip()
+        if ticker.endswith('.L'):
+            ticker = ticker[:-2] + '.LSE'
+        elif ticker.endswith('.DE'):
+            ticker = ticker[:-2] + 'XETRA'
+
+        url = f"https://eodhd.com/api/real-time/{ticker}?api_token={token}&fmt=json"
+        try:
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict):
+                    close_val = data.get('close')
+                    if close_val not in (None, 'NA', 'None', ''):
+                        return float(close_val)
+                    prev_close = data.get('previousClose')
+                    if prev_close not in (None, 'NA', 'None', ''):
+                        return float(prev_close)
+            elif response.status_code == 402:
+                print(f"EODHD daily request limit exceeded (402) for {ticker}: {response.text.strip()}")
+                return getEODpriceUK([symbol])
+            else:
+                print(f"EODHD status {response.status_code} for {ticker}: {response.text.strip()}")
+        except Exception as e:
+            print(f"Error fetching real-time price for {ticker}: {e}")
+
+        # Fallback to EOD endpoint if real-time didn't provide a price
+        try:
+            eod_url = f"https://eodhd.com/api/eod/{ticker}?api_token={token}&fmt=json&order=d&limit=1"
+            response = requests.get(eod_url)
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list) and len(data) > 0:
+                    close_val = data[0].get('close')
+                    if close_val not in (None, 'NA', 'None', ''):
+                        return float(close_val)
+        except Exception as e:
+            print(f"Error fetching EOD price for {ticker}: {e}")
+
+        return None
+
+    if isinstance(symbol_or_symbols, (list, tuple, set)):
+        return {s: _fetch_single(s) for s in symbol_or_symbols}
+    return _fetch_single(str(symbol_or_symbols))
 
 
 def main():
-    L1 = ['CNX1.L']
-    print(getEODpriceUK(L1))
-    # isin_list = ['IE00BLRPPV00']
-    # print(getEODpriceISIN(isin_list))
-    
+    L1 = ['AFX.DE']
+    print("--- Testing getEODpriceFromEODHD ---")
+    for sym in L1:
+        price = getEODpriceFromEODHD(sym)
+        print(f"{sym} -> {price}")
+
+    # Test demo token with a US symbol to verify logic regardless of rate limits
+    print("\n--- Demo token check (AAPL.US) ---")
+    demo_price = getEODpriceFromEODHD("AAPL.US", api_token="demo")
+    print(f"AAPL.US (demo) -> {demo_price}")
+
 
 if __name__ == "__main__":
     main()

@@ -5,8 +5,8 @@ Short description
 
 Prerequisites
 - Python
-- Playwright Python package installed: `pip install playwright`
-- Playwright browsers installed: `playwright install`
+- Python .venv
+- Playwright Python package installed in `.venv`: `source .venv/bin/activate && pip install playwright && playwright install`
 - A valid IG account username configured in the script (see `USERNAME` constant) and the account password supplied at runtime.
 
 Location

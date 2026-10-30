@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime, timedelta
 from rewrite_ticker_resolution import use_sec_site
-from getEODprice import getEODpriceUK, getEODpriceUSA
+from getEODprice import getEODpriceUSA, getEODpriceFromEODHD
 import rewrite_plot_portfolio_weights as ppw # TODO: rename to make it more intuitive
 from market_data_api import OHLC_YahooFinance, HistoricalMarketData
 import glob, socket, platform
@@ -69,7 +69,7 @@ def get_current_price(tickers: list) -> dict:
     eu_tickers = [ticker for ticker in tickers if ticker.endswith('.L') or ticker.endswith('.DE')]
     us_tickers = [ticker for ticker in tickers if '.' not in ticker]
     us_tickers_positions = getEODpriceUSA(us_tickers)
-    eu_tickers_positions = getEODpriceUK(eu_tickers)
+    eu_tickers_positions = getEODpriceFromEODHD(eu_tickers)
     return {**us_tickers_positions, **eu_tickers_positions}
 
 def convert_to_gbp(row):
