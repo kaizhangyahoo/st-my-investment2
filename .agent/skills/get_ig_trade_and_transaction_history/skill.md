@@ -1,3 +1,8 @@
+---
+name: get-ig-trade-and-transaction-history
+description: Uses Playwright to log into an IG account, navigate the History area, and download trade history and transaction CSV files to ~/Downloads.
+---
+
 # IG Trade & Transactions Playwright Skill
 
 Short description

@@ -1,3 +1,8 @@
+---
+name: users-login-record-firebase
+description: Tracks and retrieves user login events using Google Firebase Firestore, including logging, history retrieval, and Firebase email/password auth helpers.
+---
+
 # User Login Records (Firebase)
 
 This skill tracks and retrieves user login events using Google Firebase Firestore.
