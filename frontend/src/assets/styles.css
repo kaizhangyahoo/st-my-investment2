@@ -3,8 +3,29 @@
 @tailwind utilities;
 
 @layer base {
+  html, body {
+    margin: 0;
+    padding: 0;
+  }
   body {
-    @apply antialiased selection:bg-blue-500 selection:text-white;
+    overscroll-behavior: none;
+    background-color: #0f131c;
+    color: #dfe2ee;
   }
 }
 
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0e16;
+}
+::-webkit-scrollbar-thumb {
+  background: #262a33;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #31353e;
+}

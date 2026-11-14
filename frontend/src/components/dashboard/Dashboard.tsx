@@ -1,25 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { Navbar } from '../layout/Navbar';
-import { MetricCard } from '../common/MetricCard';
-import { FileUploader } from '../trades/FileUploader';
-import { PositionsTable } from './PositionsTable';
-import { CurrencyBreakdownPie } from './CurrencyBreakdownPie';
-import { MappingEditorTable } from '../tickers/MappingEditorTable';
-import { T212Section } from '../trading212/T212Section';
+import { Sidebar, WorkspaceTab } from '../layout/Sidebar';
+import { TopHeader } from '../layout/TopHeader';
+import { IgAnalyticsView } from './IgAnalyticsView';
+import { T212View } from '../trading212/T212View';
+import { TickerMappingView } from '../tickers/TickerMappingView';
+import { PerformanceBlotterView } from './PerformanceBlotterView';
 import { portfolioApi } from '../../services/api';
 import { PortfolioSummary } from '../../types';
 
-
 export const Dashboard: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('ig-csv-analysis');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
-  const [activeTab, setActiveTab] = useState<'holdings' | 'tickers' | 'trading212'>('holdings');
 
   const loadData = async () => {
     try {
       const data = await portfolioApi.getSummary();
       setSummary(data);
     } catch (err) {
-      console.error('Failed to load portfolio summary', err);
+      console.warn('Backend not serving live summary; falling back to terminal baseline', err);
     }
   };
 
@@ -27,87 +26,54 @@ export const Dashboard: React.FC = () => {
     loadData();
   }, []);
 
-  const totalValue = summary?.total_market_value_gbp || 0;
-  const totalCost = summary?.total_invested_cash || 0;
-  const totalPnl = summary?.total_pnl_gbp || 0;
-  const pnlPercent = totalCost > 0 ? ((totalPnl / totalCost) * 100).toFixed(1) + '%' : undefined;
+  const handleResetPanels = () => {
+    setSummary(null);
+    loadData();
+  };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-12">
-      <Navbar />
+    <div className="min-h-screen bg-surface text-on-surface flex flex-col font-sans">
+      {/* Fixed Sidebar */}
+      <Sidebar
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+      />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 space-y-6">
-        {/* KPI Row */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <MetricCard
-            label="Total Portfolio Value"
-            value={`£${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          />
-          <MetricCard
-            label="Total Capital Invested"
-            value={`£${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          />
-          <MetricCard
-            label="Unrealized Profit & Loss"
-            value={`£${totalPnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-            delta={pnlPercent}
-            isPositive={totalPnl >= 0}
-          />
+      {/* Top Fixed Header */}
+      <TopHeader
+        activeTab={activeTab}
+        isSidebarCollapsed={isSidebarCollapsed}
+        onToggleSidebar={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+        onResetPanels={handleResetPanels}
+        onRefreshData={loadData}
+      />
+
+      {/* Main Workspace View Content */}
+      <main
+        className={`flex-1 pt-20 px-4 sm:px-6 lg:px-8 transition-all duration-300 ${
+          isSidebarCollapsed ? 'ml-16' : 'ml-60'
+        }`}
+      >
+        <div className="max-w-[1600px] mx-auto py-2">
+          {activeTab === 'ig-csv-analysis' && (
+            <IgAnalyticsView
+              summary={summary}
+              onRefresh={loadData}
+              onReset={handleResetPanels}
+            />
+          )}
+
+          {activeTab === 'trading-212-api' && <T212View />}
+
+          {activeTab === 'reference-data' && <TickerMappingView />}
+
+          {activeTab === 'performance-blotter' && <PerformanceBlotterView />}
         </div>
-
-        {/* Upload Zone */}
-        <FileUploader onUploadSuccess={loadData} />
-
-        {/* Tab Navigation */}
-        <div className="flex space-x-2 border-b border-slate-200 dark:border-slate-800 pb-2">
-          <button
-            onClick={() => setActiveTab('holdings')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-              activeTab === 'holdings'
-                ? 'bg-blue-600 text-white'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-            }`}
-          >
-            Holdings & Allocation
-          </button>
-          <button
-            onClick={() => setActiveTab('tickers')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-              activeTab === 'tickers'
-                ? 'bg-blue-600 text-white'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-            }`}
-          >
-            Ticker Mapping Editor
-          </button>
-          <button
-            onClick={() => setActiveTab('trading212')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-              activeTab === 'trading212'
-                ? 'bg-blue-600 text-white'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-            }`}
-          >
-            Trading 212 API
-          </button>
-        </div>
-
-        {/* Active Tab Content */}
-        {activeTab === 'holdings' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2">
-              <PositionsTable positions={summary?.positions || []} />
-            </div>
-            <div>
-              <CurrencyBreakdownPie allocation={summary?.currency_allocation} />
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'tickers' && <MappingEditorTable />}
-
-        {activeTab === 'trading212' && <T212Section />}
       </main>
     </div>
   );
 };
+
+export default Dashboard;

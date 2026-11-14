@@ -1,38 +1,70 @@
 # st-my-investment2: Portfolio Management & Analytics
 
-[![Jira Issue](https://img.shields.io/badge/Jira-KAN--3-blue)](https://kaizhang.atlassian.net/browse/KAN-3)
+[![Jira KAN-3](https://img.shields.io/badge/Jira-KAN--3%20De--Streamlit-blue)](https://kaizhang.atlassian.net/browse/KAN-3)
+[![Jira KAN-6](https://img.shields.io/badge/Jira-KAN--6%20Stitch%20Redesign-emerald)](https://kaizhang.atlassian.net/browse/KAN-6)
 [![Confluence Spec](https://img.shields.io/badge/Confluence-Design%20Spec-0052CC)](https://kaizhang.atlassian.net/wiki/spaces/LC/pages/1409056769)
 
-## 📌 Architecture Overview (KAN-3: De-Streamlit)
-This repository hosts the **Portfolio Management Dashboard and Analytics** application. As specified in **[KAN-3](https://kaizhang.atlassian.net/browse/KAN-3)**, the monolithic Streamlit architecture has been refactored into a decoupled, modern Web Application:
-- **Frontend:** React 18, Vite, TypeScript, and Tailwind CSS.
-- **Backend:** Python 3.11+ FastAPI REST API with Pydantic v2 schemas and modular service engines.
-- **Local Dev Workflow:** Python CLI runner (`cli.py`) inspired by the CV-creator pattern.
+## 📌 Architecture Overview
 
-For complete technical specifications, see the **[Confluence Architecture & Technical Design Page](https://kaizhang.atlassian.net/wiki/spaces/LC/pages/1409056769)**.
+This repository hosts the **Portfolio Management Dashboard and Analytics** application. Originally built as a monolithic Streamlit application, it has transitioned to a modern, decoupled web architecture:
+- **Frontend:** Single Page Application (SPA) built with React 18, Vite, TypeScript, and Tailwind CSS.
+- **UI/UX Design:** High-fidelity, institutional dark financial terminal styled from **Google Stitch** (Project: *Kai Family Office*, ID: `12026627589197832258`).
+- **Backend:** High-performance RESTful API built with Python 3.11+, FastAPI, and Pydantic v2.
+- **Local Dev Workflow:** Unified Python CLI runner (`cli.py`) enabling one-command local launching of both services.
+- **Decoupled Login for Prototyping:** Local development directly opens the active terminal workspaces without requiring authentication gates.
 
 ---
 
-## 🏛 System Architecture
+## 🏛 System Architecture & Workspaces
+
+The application features four institutional workspaces accessible via the persistent sidebar:
+
+1. **IG CSV Analysis (`/` - default view):**
+   - Drag-and-drop ingestion of IG Broker statements (`Trade*.csv` and `Transaction*.csv`).
+   - Consolidated portfolio telemetry (Total Market Value, Cash Buffer, Cost Basis, Unrealized P&L).
+   - Real-time holdings ledger with 7-day trend sparklines, exchange taxonomy, and P&L color coding.
+   - Currency & sector allocation donut chart (USD, GBP, EUR exposure).
+   - Single Instrument Inspector with interactive ticker switcher, execution markers (Buys/Sells), and trade fill history.
+   - Recent quarters trade activity blotter with `ALL`, `BUYS`, and `SELLS` quick filters.
+   - Cashflow waterfall breakdown (dividends, cash interest, broker commissions, stamp duty).
+
+2. **Trading 212 API Workspace:**
+   - Pure REST API integration using direct header authentication (`x-t212-key`, `x-t212-secret`).
+   - 7 Bloomberg-dense telemetry cards (Value, Cash, Investments, Cost, Realised P&L, FX Impact, Unrealised P&L).
+   - Live open positions blotter with spread, average buy price, and % portfolio weight.
+   - Currency exposure donut and FX risk alert callout.
+   - Order history and execution blotter with filled status.
+   - Dividends blotter & income telemetry with yield-on-cost and projected run-rate.
+
+3. **Reference Data & Ticker Mapping Editor:**
+   - Active symbology master table (`CSV Raw String / Broker Feed` ➔ `Yahoo Ticker`).
+   - Direct persistence to `company_name_to_ticker.json` on disk via FastAPI PUT endpoint.
+   - Ingestion reconciliation engine with SEC EDGAR auto-resolver for unmapped symbols.
+   - Live syntax-highlighted JSON store inspector.
+
+4. **Performance Blotter:**
+   - Consolidated portfolio equity curve over time from historical ledger accounts.
+   - S&P 500 benchmark overlay.
+   - Risk & return telemetry (Sharpe ratio, max drawdown, annualized volatility, win rate).
 
 ```mermaid
 flowchart TB
-    subgraph Client["Frontend: React + Vite (TypeScript)"]
-        UI["Tailwind UI / Responsive Layout"]
-        Auth["Auth Gate: JWT / Email / OAuth"]
+    subgraph Client["Frontend: React 18 + Vite (Tailwind CSS - Stitch Dark Theme)"]
+        Sidebar["Institutional Sidebar (4 Workspaces)"]
+        Header["Terminal Top Header & Spot Rate Ticker"]
         
-        subgraph Views["Views & Components"]
-            Holdings["Holdings & P&L Table"]
-            Upload["CSV Drag & Drop Uploader"]
-            Tickers["Interactive Ticker Editor"]
-            Charts["Currency & Allocation Charts"]
-            T212["Trading 212 API Sync"]
+        subgraph Workspaces["Analytics Workspaces"]
+            IGView["IG CSV Analysis View"]
+            T212View["Trading 212 API View"]
+            RefData["Reference Data & Ticker Mapping"]
+            PerfView["Performance Blotter View"]
         end
 
-        UI --> Views
+        Sidebar --> Workspaces
+        Header --> Workspaces
     end
 
-    subgraph CLI["Developer CLI Runner (cli.py)"]
+    subgraph CLI["CLI Runner (cli.py)"]
         DevCmd["python cli.py dev"]
         StartCmd["python cli.py start"]
     end
@@ -40,26 +72,26 @@ flowchart TB
     subgraph Server["Backend: FastAPI (Python 3.11+)"]
         API["FastAPI App (/api/v1)"]
         
-        subgraph Endpoints["Endpoints"]
-            AuthEP["/auth"]
-            TradesEP["/trades"]
-            PortfolioEP["/portfolio"]
-            TickersEP["/tickers"]
-            MarketEP["/market-data"]
-            T212EP["/trading212"]
+        subgraph Endpoints["API Routers"]
+            TradesEP["/trades (upload, summary, waterfall)"]
+            T212EP["/trading212 (overview, positions)"]
+            TickersEP["/tickers (mappings, resolve)"]
+            PortfolioEP["/portfolio (history, benchmark)"]
+            MarketEP["/market-data (quotes, fx, ohlc)"]
+            AuthEP["/auth (login, signup, me)"]
         end
 
-        subgraph Services["Service Engines"]
-            Engine["Portfolio Calculation Engine"]
-            Market["Market Data & FX Aggregator"]
-            TickerSvc["SEC EDGAR & Mapping Service"]
+        subgraph Services["Engines & Clients"]
+            Engine["Portfolio Engine (FX & Basis)"]
             T212Svc["Trading 212 Client"]
+            TickerSvc["Ticker & SEC Service"]
+            MarketSvc["Market Data & FX Aggregator"]
         end
 
-        subgraph Storage["Storage & Caching"]
-            Config["Pydantic Settings / .env"]
-            Cache[("Thread-Safe TTLCache")]
-            JSONFiles[("company_name_to_ticker.json<br/>user_portfolio_values.json")]
+        subgraph Storage["Data Store"]
+            JSONMap[("company_name_to_ticker.json")]
+            JSONValues[("user_portfolio_values.json")]
+            MemStore[("In-Memory Statement Store")]
         end
 
         API --> Endpoints
@@ -67,18 +99,9 @@ flowchart TB
         Services --> Storage
     end
 
-    subgraph External["External Services"]
-        YF["Yahoo Finance (FX & OHLC)"]
-        EODHD["EOD Historical Data"]
-        Alpaca["Alpaca / TwelveData"]
-        SEC["SEC EDGAR API"]
-        T212Broker["Trading 212 Broker API"]
-    end
-
-    Client <-->|"REST API (JSON / FormData)"| API
-    CLI -->|"Launches"| Client
-    CLI -->|"Launches"| Server
-    Services <--> External
+    Client <-->|"REST API"| API
+    CLI --> Client
+    CLI --> Server
 ```
 
 ---
@@ -90,50 +113,48 @@ flowchart TB
 - Node.js 18+ and npm
 
 ### 2. Environment Setup
-Copy the example environment configuration:
 ```bash
+# Backend environment variables
 cp backend/.env.example backend/.env
-```
-*(No secrets are committed to git)*
 
-### 3. Running Locally (CLI Runner)
-Using the unified CLI runner:
+# Local secrets & Stitch MCP API Key (gitignored)
+cp .env.example .env
+```
+
+### 3. Running Locally
+
 ```bash
-# Start development environment (FastAPI on :8000 + Vite on :5173 with auto-reload)
+# Option A: Start development mode (FastAPI on :8000 + Vite on :5173 with auto-reload)
 python cli.py dev
 
-# Serve the production build directly from FastAPI on port 8000
+# Option B: Serve the production build directly from FastAPI on port 8000
 python cli.py start
 ```
 
----
-
-## 📂 Project Structure
-```
-├── cli.py                     # Root CLI runner (CV-creator pattern)
-├── backend/                   # FastAPI application
-│   ├── app/
-│   │   ├── main.py            # FastAPI entry & router registration
-│   │   ├── core/              # Config (Pydantic BaseSettings), security, cache
-│   │   ├── api/v1/            # Auth, trades, portfolio, tickers, market-data, trading212
-│   │   ├── schemas/           # Pydantic v2 validation models
-│   │   └── services/          # Pure calculation engines & API wrappers
-│   ├── requirements.txt       # Backend dependencies
-│   └── .env.example           # Configuration template
-├── frontend/                  # React Single Page Application
-│   ├── src/
-│   │   ├── components/        # Layout, auth, dashboard, trades, tickers, trading212
-│   │   ├── hooks/             # Zustand auth store & custom hooks
-│   │   ├── services/          # Axios API client
-│   │   └── types/             # TypeScript interfaces
-│   ├── package.json           # Frontend dependencies
-│   └── vite.config.ts         # Vite build & proxy configuration
-└── company_name_to_ticker.json# Broker market name to Yahoo ticker mappings
+### 4. Building Frontend Assets
+```bash
+cd frontend
+npm install
+npm run build
 ```
 
 ---
 
-## 📖 Detailed Specifications
-- **Confluence Design Document:** [st-my-investment2: Web Architecture & Technical Design (KAN-3)](https://kaizhang.atlassian.net/wiki/spaces/LC/pages/1409056769)
-- **Jira Story:** [KAN-3](https://kaizhang.atlassian.net/browse/KAN-3)
+## 🔌 Google Stitch MCP Integration
 
+Google Stitch MCP provides AI-native design system and screen management tools directly through Model Context Protocol.
+
+- **Endpoint:** `https://stitch.googleapis.com/mcp`
+- **Transport:** HTTP JSON-RPC
+- **Project Name:** Kai Family Office (`projects/12026627589197832258`)
+- **Key Screens:**
+  - `KAI Family Office Investment Dashboard` (`fdea23702f7f4d8b81ec716feea03a80`)
+  - `Trading 212 API Portfolio Analysis` (`06a65981fac64ce9acc6f5276b495df1`)
+  - `Reference Data & Ticker Mapping Editor` (`c2abfb97bc114db0a9ac72cdececda1e`)
+
+---
+
+## 📖 Specifications & Tracking
+- **Jira Story (Frontend Redesign):** [KAN-6: Frontend redesign without login page](https://kaizhang.atlassian.net/browse/KAN-6)
+- **Jira Story (Architecture):** [KAN-3: propose new design and architecture](https://kaizhang.atlassian.net/browse/KAN-3)
+- **Confluence Architecture Page:** [st-my-investment2: Web Architecture & Technical Design (KAN-3)](https://kaizhang.atlassian.net/wiki/spaces/LC/pages/1409056769)

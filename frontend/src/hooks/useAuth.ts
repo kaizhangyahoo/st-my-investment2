@@ -13,9 +13,14 @@ interface AuthState {
 }
 
 export const useAuth = create<AuthState>((set) => ({
-  user: null,
-  token: localStorage.getItem('access_token'),
-  isAuthenticated: !!localStorage.getItem('access_token'),
+  user: {
+    email: 'kai@familyoffice.local',
+    name: 'Kai (FO Principal)',
+    provider: 'local',
+    user_id: 'kai_fo_dev'
+  },
+  token: localStorage.getItem('access_token') || 'local-dev-token',
+  isAuthenticated: true,
   isLoading: false,
 
   login: async (email, password) => {
@@ -34,7 +39,7 @@ export const useAuth = create<AuthState>((set) => ({
       }
       set({ isLoading: false });
       return false;
-    } catch (err) {
+    } catch {
       set({ isLoading: false });
       return false;
     }
@@ -42,7 +47,15 @@ export const useAuth = create<AuthState>((set) => ({
 
   logout: () => {
     localStorage.removeItem('access_token');
-    set({ user: null, token: null, isAuthenticated: false });
+    set({
+      user: {
+        email: 'guest@familyoffice.local',
+        name: 'Guest Viewer',
+        provider: 'local',
+      },
+      token: null,
+      isAuthenticated: true
+    });
   },
 
   checkAuth: async () => {
@@ -52,9 +65,7 @@ export const useAuth = create<AuthState>((set) => ({
       const user = await authApi.getMe();
       set({ user, isAuthenticated: true });
     } catch {
-      localStorage.removeItem('access_token');
-      set({ user: null, token: null, isAuthenticated: false });
+      // Keep local dev session active
     }
   },
 }));
-

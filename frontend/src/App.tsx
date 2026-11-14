@@ -1,21 +1,15 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { LoginForm } from './components/auth/LoginForm';
-import { useAuth } from './hooks/useAuth';
 
 export const App: React.FC = () => {
-  const { isAuthenticated, checkAuth } = useAuth();
-
-  useEffect(() => {
-    checkAuth();
-  }, [checkAuth]);
-
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <LoginForm />} />
-        <Route path="/" element={isAuthenticated ? <Dashboard /> : <Navigate to="/login" replace />} />
+        {/* Prototype ignores/decouples login: directly open institutional dashboard */}
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/login" element={<LoginForm />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
@@ -23,4 +17,3 @@ export const App: React.FC = () => {
 };
 
 export default App;
-
