@@ -35,6 +35,7 @@ export const portfolioApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })).data;
   },
+  reset: async () => (await api.post('/trades/reset')).data,
 };
 
 export const tickersApi = {

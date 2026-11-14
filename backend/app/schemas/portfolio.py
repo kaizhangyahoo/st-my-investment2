@@ -16,12 +16,23 @@ class CurrencyAllocation(BaseModel):
     gbp: float
     total_gbp: float
 
+class TradeActivityItem(BaseModel):
+    qty: float
+    fill: str
+    value: str
+    date: str
+    time: str
+    activity: str
+    market: str
+
 class PortfolioSummary(BaseModel):
     total_market_value_gbp: float
     total_invested_cash: float
     total_pnl_gbp: float
     currency_allocation: CurrencyAllocation
     positions: List[Position]
+    source_file: Optional[str] = None
+    trade_activities: Optional[List[TradeActivityItem]] = None
 
 class PortfolioHistoryPoint(BaseModel):
     date: str

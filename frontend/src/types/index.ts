@@ -22,12 +22,24 @@ export interface CurrencyAllocation {
   total_gbp: number;
 }
 
+export interface TradeActivityItem {
+  qty: number;
+  fill: string;
+  value: string;
+  date: string;
+  time: string;
+  activity: string;
+  market: string;
+}
+
 export interface PortfolioSummary {
   total_market_value_gbp: number;
   total_invested_cash: number;
   total_pnl_gbp: number;
   currency_allocation: CurrencyAllocation;
   positions: Position[];
+  source_file?: string | null;
+  trade_activities?: TradeActivityItem[];
 }
 
 export interface PortfolioHistoryPoint {

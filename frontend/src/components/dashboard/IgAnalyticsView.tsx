@@ -95,8 +95,13 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
       p.market.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Filtered trade activity
-  const filteredActivity = SAMPLE_TRADE_ACTIVITY.filter((item) => {
+  // Filtered trade activity (live from summary or fallback sample)
+  const tradeActivities =
+    summary && summary.trade_activities && summary.trade_activities.length > 0
+      ? summary.trade_activities
+      : SAMPLE_TRADE_ACTIVITY;
+
+  const filteredActivity = tradeActivities.filter((item) => {
     if (activityFilter === 'BUYS') return item.activity === 'BUY';
     if (activityFilter === 'SELLS') return item.activity === 'SELL';
     return true;
@@ -164,8 +169,8 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
           <div className="flex items-center justify-between pt-3 mt-3 border-t border-surface-container/40 text-on-surface-variant">
             <div className="flex items-center gap-1.5 truncate max-w-[200px]">
               <span className="material-symbols-outlined text-[15px] text-secondary">description</span>
-              <span className="font-data-mono-sm text-data-mono-sm text-secondary truncate">
-                {uploadedFiles.length > 0 ? uploadedFiles[0] : 'sample_trade_ledger_2026.csv'}
+              <span className="font-data-mono-sm text-data-mono-sm text-secondary truncate" title={uploadedFiles.length > 0 ? uploadedFiles[0] : (summary?.source_file || 'sample_trade_ledger_2026.csv')}>
+                {uploadedFiles.length > 0 ? uploadedFiles[0] : (summary?.source_file || 'sample_trade_ledger_2026.csv')}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -697,7 +702,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                   : 'text-outline hover:text-on-surface'
               }`}
             >
-              ALL ({SAMPLE_TRADE_ACTIVITY.length})
+              ALL ({tradeActivities.length})
             </button>
             <button
               type="button"
@@ -708,7 +713,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                   : 'text-outline hover:text-on-surface'
               }`}
             >
-              BUYS (4)
+              BUYS ({tradeActivities.filter((a) => a.activity === 'BUY').length})
             </button>
             <button
               type="button"
@@ -719,7 +724,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                   : 'text-outline hover:text-on-surface'
               }`}
             >
-              SELLS (2)
+              SELLS ({tradeActivities.filter((a) => a.activity === 'SELL').length})
             </button>
           </div>
         </div>

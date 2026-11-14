@@ -26,8 +26,13 @@ export const Dashboard: React.FC = () => {
     loadData();
   }, []);
 
-  const handleResetPanels = () => {
+  const handleResetPanels = async () => {
     setSummary(null);
+    try {
+      await portfolioApi.reset();
+    } catch (err) {
+      console.warn('Reset call failed:', err);
+    }
     loadData();
   };
 
