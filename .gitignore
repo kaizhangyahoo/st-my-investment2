@@ -8,5 +8,14 @@ ig/ig_positions.py
 .streamlit/secrets.toml
 .chatledger/*
 .env
+.env.local
 .DS_Store
 trading212/*.csv
+1.ipynb
+2.ipynb
+3.ipynb
+
+terraform.log
+terraform/terraform.tfstate.backup
+**/node_modules/*
+mcp.json
