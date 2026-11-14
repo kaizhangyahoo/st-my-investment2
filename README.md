@@ -8,8 +8,9 @@
 
 This repository hosts the **Portfolio Management Dashboard and Analytics** application. Originally built as a monolithic Streamlit application, it has transitioned to a modern, decoupled web architecture:
 - **Frontend:** Single Page Application (SPA) built with React 18, Vite, TypeScript, and Tailwind CSS.
-- **UI/UX Design:** High-fidelity, institutional dark financial terminal styled from **Google Stitch** (Project: *Kai Family Office*, ID: `12026627589197832258`).
+- **UI/UX Design (KAN-6):** High-fidelity, institutional dark financial terminal styled and redesigned using **Google Stitch** (Project: *Kai Family Office*, ID: `12026627589197832258`). Provides a streamlined, direct-to-workspace layout without blocking login hurdles for prototyping.
 - **Backend:** High-performance RESTful API built with Python 3.11+, FastAPI, and Pydantic v2.
+- **Smart Statement Ingestion & Local Autoload:** Automatically inspects the local environment (`~/Downloads/Tr*.csv`) for the latest real IG statements before falling back to sample data.
 - **Local Dev Workflow:** Unified Python CLI runner (`cli.py`) enabling one-command local launching of both services.
 - **Decoupled Login for Prototyping:** Local development directly opens the active terminal workspaces without requiring authentication gates.
 
@@ -20,13 +21,15 @@ This repository hosts the **Portfolio Management Dashboard and Analytics** appli
 The application features four institutional workspaces accessible via the persistent sidebar:
 
 1. **IG CSV Analysis (`/` - default view):**
-   - Drag-and-drop ingestion of IG Broker statements (`Trade*.csv` and `Transaction*.csv`).
+   - **Local File Auto-Discovery:** Scans `~/Downloads` for `Tr*.csv` statements (`TradeHistory-*.csv` and `TransactionHistory-*.csv`), parses filename date ranges or modification timestamps, and auto-loads the latest statement. Safely falls back to the institutional sample ledger only if no local statements exist.
+   - Drag-and-drop ingestion deck for manual uploading of IG Broker statements (`Trade*.csv` and `Transaction*.csv`).
    - Consolidated portfolio telemetry (Total Market Value, Cash Buffer, Cost Basis, Unrealized P&L).
    - Real-time holdings ledger with 7-day trend sparklines, exchange taxonomy, and P&L color coding.
    - Currency & sector allocation donut chart (USD, GBP, EUR exposure).
    - Single Instrument Inspector with interactive ticker switcher, execution markers (Buys/Sells), and trade fill history.
-   - Recent quarters trade activity blotter with `ALL`, `BUYS`, and `SELLS` quick filters.
+   - Recent quarters trade activity blotter with `ALL`, `BUYS`, and `SELLS` quick filters populated from parsed statements.
    - Cashflow waterfall breakdown (dividends, cash interest, broker commissions, stamp duty).
+   - One-click panel reset (`POST /api/v1/trades/reset`) to purge in-memory cache and re-scan for fresh local statement files.
 
 2. **Trading 212 API Workspace:**
    - Pure REST API integration using direct header authentication (`x-t212-key`, `x-t212-secret`).
@@ -73,12 +76,12 @@ flowchart TB
         API["FastAPI App (/api/v1)"]
         
         subgraph Endpoints["API Routers"]
-            TradesEP["/trades (upload, summary, waterfall)"]
+            TradesEP["/trades (upload, summary, waterfall, reset)"]
             T212EP["/trading212 (overview, positions)"]
             TickersEP["/tickers (mappings, resolve)"]
             PortfolioEP["/portfolio (history, benchmark)"]
             MarketEP["/market-data (quotes, fx, ohlc)"]
-            AuthEP["/auth (login, signup, me)"]
+            AuthEP["/auth (login, signup, me, log-event)"]
         end
 
         subgraph Services["Engines & Clients"]
@@ -88,10 +91,11 @@ flowchart TB
             MarketSvc["Market Data & FX Aggregator"]
         end
 
-        subgraph Storage["Data Store"]
+        subgraph Storage["Data Store & Ingestion"]
             JSONMap[("company_name_to_ticker.json")]
             JSONValues[("user_portfolio_values.json")]
             MemStore[("In-Memory Statement Store")]
+            LocalDownloads[("Local ~/Downloads (Tr*.csv)")]
         end
 
         API --> Endpoints
@@ -140,6 +144,15 @@ npm run build
 
 ---
 
+## 🎨 Google Stitch Redesign (KAN-6)
+
+As part of **[KAN-6](https://kaizhang.atlassian.net/browse/KAN-6)**, the UI was rebuilt into a dark-mode institutional trading terminal using Google Stitch:
+- **Direct Workspace Navigation:** Bypasses login gates for rapid local prototyping while keeping JWT and Firebase auth endpoints available.
+- **Dynamic Telemetry & Live Data Binding:** Replaced static placeholders with reactive summaries calculated from ingested broker statements.
+- **Local Download Auto-Detection:** Seamless transition from mock preview to user's real portfolio by checking `~/Downloads/Tr*.csv` on startup.
+
+---
+
 ## 🔌 Google Stitch MCP Integration
 
 Google Stitch MCP provides AI-native design system and screen management tools directly through Model Context Protocol.
@@ -153,6 +166,7 @@ Google Stitch MCP provides AI-native design system and screen management tools d
   - `Reference Data & Ticker Mapping Editor` (`c2abfb97bc114db0a9ac72cdececda1e`)
 
 ---
+
 
 ## 📖 Specifications & Tracking
 - **Jira Story (Frontend Redesign):** [KAN-6: Frontend redesign without login page](https://kaizhang.atlassian.net/browse/KAN-6)
