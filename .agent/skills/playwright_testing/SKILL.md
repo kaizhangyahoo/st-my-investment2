@@ -1,3 +1,8 @@
+---
+name: playwright-testing
+description: Structured approach to testing the Streamlit Portfolio Dashboard using Playwright, covering setup, auth helpers, and test execution locally or against Cloud Run.
+---
+
 # Playwright Testing Skill
 
 This skill provides a structured approach to testing the Streamlit Portfolio Dashboard using Playwright.
