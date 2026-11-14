@@ -39,7 +39,9 @@ export interface PortfolioSummary {
   currency_allocation: CurrencyAllocation;
   positions: Position[];
   source_file?: string | null;
+  transaction_file?: string | null;
   trade_activities?: TradeActivityItem[];
+  missing_trade_history?: boolean;
 }
 
 export interface PortfolioHistoryPoint {

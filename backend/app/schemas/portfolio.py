@@ -32,7 +32,9 @@ class PortfolioSummary(BaseModel):
     currency_allocation: CurrencyAllocation
     positions: List[Position]
     source_file: Optional[str] = None
+    transaction_file: Optional[str] = None
     trade_activities: Optional[List[TradeActivityItem]] = None
+    missing_trade_history: bool = False
 
 class PortfolioHistoryPoint(BaseModel):
     date: str

@@ -17,6 +17,8 @@ router = APIRouter(prefix="/trades", tags=["trades"])
 _LAST_TRADE_DF: Dict[str, pd.DataFrame] = {}
 _LAST_TRANSACTION_DF: Dict[str, pd.DataFrame] = {}
 _LAST_TRADE_FILENAME: Dict[str, str] = {}
+_LAST_TRANSACTION_FILENAME: Dict[str, str] = {}
+_USER_MANUAL_UPLOAD: Dict[str, bool] = {}
 
 def parse_file_date(filepath: str) -> datetime:
     """Extract date from filename (e.g. DD-MM-YYYY) or fallback to file modification time."""
@@ -110,6 +112,11 @@ def get_or_load_trade_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Optional
     if df is not None:
         return df, filename
 
+    # If the user performed a manual upload that lacked trade history,
+    # do NOT auto-load from ~/Downloads behind the scenes.
+    if _USER_MANUAL_UPLOAD.get(user_id) and user_id in _LAST_TRANSACTION_DF:
+        return None, None
+
     # Search ~/Downloads
     latest_trade, latest_trans = find_latest_download_files()
     if latest_trade and os.path.exists(latest_trade):
@@ -120,6 +127,7 @@ def get_or_load_trade_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Optional
             if latest_trans and os.path.exists(latest_trans) and user_id not in _LAST_TRANSACTION_DF:
                 try:
                     _LAST_TRANSACTION_DF[user_id] = pd.read_csv(latest_trans)
+                    _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
                 except Exception:
                     pass
             return loaded_df, os.path.basename(latest_trade)
@@ -131,6 +139,10 @@ def get_or_load_trade_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Optional
 async def upload_files(files: List[UploadFile] = File(...), user: dict = Depends(get_current_user)):
     user_id = user.get("sub", "default")
     results = {"trade_files": [], "transaction_files": [], "errors": []}
+    _USER_MANUAL_UPLOAD[user_id] = True
+
+    uploaded_trade = False
+    uploaded_transaction = False
 
     for f in files:
         contents = await f.read()
@@ -140,18 +152,30 @@ async def upload_files(files: List[UploadFile] = File(...), user: dict = Depends
                 _LAST_TRADE_DF[user_id] = df
                 _LAST_TRADE_FILENAME[user_id] = f.filename
                 results["trade_files"].append(f.filename)
+                uploaded_trade = True
             elif f.filename.startswith("Transaction") or "PL Amount" in df.columns:
                 _LAST_TRANSACTION_DF[user_id] = df
+                _LAST_TRANSACTION_FILENAME[user_id] = f.filename
                 results["transaction_files"].append(f.filename)
+                uploaded_transaction = True
         except Exception as e:
             results["errors"].append(f"Failed to parse {f.filename}: {str(e)}")
 
+    # If user explicitly uploaded only transaction files, clear old trade memory to trigger Scenario B
+    if uploaded_transaction and not uploaded_trade:
+        _LAST_TRADE_DF.pop(user_id, None)
+        _LAST_TRADE_FILENAME.pop(user_id, None)
+
+    results["missing_trade_history"] = (user_id not in _LAST_TRADE_DF) and (user_id in _LAST_TRANSACTION_DF)
     return results
 
 @router.get("/summary", response_model=PortfolioSummary)
 def get_portfolio_summary(user: dict = Depends(get_current_user)):
     user_id = user.get("sub", "default")
     df, filename = get_or_load_trade_df(user_id)
+    has_trans = user_id in _LAST_TRANSACTION_DF
+    trans_filename = _LAST_TRANSACTION_FILENAME.get(user_id)
+    missing_trade = (df is None) and has_trans
 
     if df is None:
         # Fallback empty summary
@@ -162,12 +186,16 @@ def get_portfolio_summary(user: dict = Depends(get_current_user)):
             "currency_allocation": {"usd_gbp": 0.0, "eur_gbp": 0.0, "gbp": 0.0, "total_gbp": 0.0},
             "positions": [],
             "source_file": None,
-            "trade_activities": []
+            "transaction_file": trans_filename,
+            "trade_activities": [],
+            "missing_trade_history": missing_trade,
         }
 
     res = calculate_positions_from_df(df)
     res["source_file"] = filename
+    res["transaction_file"] = trans_filename
     res["trade_activities"] = extract_trade_activities(df)
+    res["missing_trade_history"] = False
     return res
 
 @router.get("/waterfall", response_model=List[CashflowItem])
@@ -180,6 +208,7 @@ def get_cashflow_waterfall(user: dict = Depends(get_current_user)):
             try:
                 df = pd.read_csv(latest_trans)
                 _LAST_TRANSACTION_DF[user_id] = df
+                _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
             except Exception:
                 pass
 
@@ -194,4 +223,6 @@ def reset_portfolio(user: dict = Depends(get_current_user)):
     _LAST_TRADE_DF.pop(user_id, None)
     _LAST_TRANSACTION_DF.pop(user_id, None)
     _LAST_TRADE_FILENAME.pop(user_id, None)
+    _LAST_TRANSACTION_FILENAME.pop(user_id, None)
+    _USER_MANUAL_UPLOAD.pop(user_id, None)
     return {"status": "reset", "user_id": user_id}

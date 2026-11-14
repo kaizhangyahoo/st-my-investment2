@@ -70,23 +70,49 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
     accept: { 'text/csv': ['.csv'] },
   });
 
+  // Resolve active displayed files (supports displaying multiple uploaded files)
+  const activeFileList: string[] = [];
+  if (uploadedFiles.length > 0) {
+    activeFileList.push(...uploadedFiles);
+  } else {
+    if (summary?.source_file) activeFileList.push(summary.source_file);
+    if (summary?.transaction_file) activeFileList.push(summary.transaction_file);
+  }
+  const displayedFileName =
+    activeFileList.length > 0 ? activeFileList.join(' • ') : 'sample_trade_ledger_2026.csv';
+
+  // Scenario B detection: transaction statement uploaded/present, but trade history is missing
+  const isMissingTradeHistory = Boolean(
+    summary?.missing_trade_history ||
+    (uploadedFiles.length > 0 &&
+      uploadedFiles.some((f) => /trans/i.test(f)) &&
+      !uploadedFiles.some((f) => /trade/i.test(f)))
+  );
+
   // Calculate or fallback data
   const hasLivePositions = summary && summary.positions && summary.positions.length > 0;
-  const positions = hasLivePositions ? summary.positions : SAMPLE_POSITIONS;
+  // If trade history is missing (Scenario B), DO NOT load default demo dataset
+  const positions = isMissingTradeHistory ? [] : (hasLivePositions ? summary.positions : SAMPLE_POSITIONS);
 
-  const totalValue = hasLivePositions
+  const totalValue = isMissingTradeHistory
+    ? 0
+    : hasLivePositions
     ? summary.total_market_value_gbp
     : positions.reduce((acc, p) => acc + p.market_value_gbp, 0);
 
-  const totalCost = hasLivePositions
+  const totalCost = isMissingTradeHistory
+    ? 0
+    : hasLivePositions
     ? summary.total_invested_cash
     : totalValue - positions.reduce((acc, p) => acc + p.pnl_gbp, 0);
 
-  const totalPnl = hasLivePositions
+  const totalPnl = isMissingTradeHistory
+    ? 0
+    : hasLivePositions
     ? summary.total_pnl_gbp
     : positions.reduce((acc, p) => acc + p.pnl_gbp, 0);
 
-  const pnlPercent = totalCost > 0 ? ((totalPnl / totalCost) * 100).toFixed(1) : '16.9';
+  const pnlPercent = totalCost > 0 ? ((totalPnl / totalCost) * 100).toFixed(1) : '0.0';
 
   // Filtered positions
   const filteredPositions = positions.filter(
@@ -96,10 +122,11 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   );
 
   // Filtered trade activity (live from summary or fallback sample)
-  const tradeActivities =
-    summary && summary.trade_activities && summary.trade_activities.length > 0
-      ? summary.trade_activities
-      : SAMPLE_TRADE_ACTIVITY;
+  const tradeActivities = isMissingTradeHistory
+    ? []
+    : summary && summary.trade_activities && summary.trade_activities.length > 0
+    ? summary.trade_activities
+    : SAMPLE_TRADE_ACTIVITY;
 
   const filteredActivity = tradeActivities.filter((item) => {
     if (activityFilter === 'BUYS') return item.activity === 'BUY';
@@ -107,7 +134,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
     return true;
   });
 
-  const selectedHolding = positions.find((p) => p.ticker === selectedTicker) || positions[0];
+  const selectedHolding = positions.find((p) => p.ticker === selectedTicker) || positions[0] || null;
 
   return (
     <div className="space-y-space-lg pb-16">
@@ -163,21 +190,44 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                 {uploadError}
               </div>
             )}
+
+            {isMissingTradeHistory && !uploadError && (
+              <div className="mt-2 text-amber-400 text-xs font-mono bg-amber-500/10 border border-amber-500/30 p-2.5 rounded-lg flex items-start gap-2">
+                <span className="material-symbols-outlined text-[16px] text-amber-400 mt-0.5 shrink-0">
+                  warning
+                </span>
+                <div>
+                  <span className="font-semibold block text-[11px]">Missing Trade History Statement</span>
+                  <span className="text-[10px] text-on-surface-variant leading-tight block mt-0.5">
+                    Transaction ledger uploaded, but position and valuation calculations require <code className="text-primary font-bold">Trade*.csv</code>. Please drop it here.
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Active File Status Bar */}
           <div className="flex items-center justify-between pt-3 mt-3 border-t border-surface-container/40 text-on-surface-variant">
-            <div className="flex items-center gap-1.5 truncate max-w-[200px]">
+            <div className="flex items-center gap-1.5 truncate max-w-[240px]">
               <span className="material-symbols-outlined text-[15px] text-secondary">description</span>
-              <span className="font-data-mono-sm text-data-mono-sm text-secondary truncate" title={uploadedFiles.length > 0 ? uploadedFiles[0] : (summary?.source_file || 'sample_trade_ledger_2026.csv')}>
-                {uploadedFiles.length > 0 ? uploadedFiles[0] : (summary?.source_file || 'sample_trade_ledger_2026.csv')}
+              <span className="font-data-mono-sm text-data-mono-sm text-secondary truncate" title={displayedFileName}>
+                {displayedFileName}
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="font-label-caps text-label-caps text-outline">PARSER: IG</span>
+              {isMissingTradeHistory ? (
+                <span className="font-label-caps text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30">
+                  MISSING TRADE HISTORY
+                </span>
+              ) : (
+                <span className="font-label-caps text-label-caps text-outline">PARSER: IG</span>
+              )}
               <button
                 type="button"
-                onClick={onReset}
+                onClick={() => {
+                  setUploadedFiles([]);
+                  onReset();
+                }}
                 title="Reset panels"
                 className="p-1 rounded hover:bg-surface-container text-outline hover:text-tertiary transition-colors"
               >
@@ -212,8 +262,10 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                 £{totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
               <div className="flex items-center gap-1 font-data-mono-sm text-data-mono-sm text-primary">
-                <span className="material-symbols-outlined text-[14px]">trending_up</span>
-                <span>+£14,920.40 today</span>
+                <span className="material-symbols-outlined text-[14px]">
+                  {isMissingTradeHistory ? 'warning' : 'trending_up'}
+                </span>
+                <span>{isMissingTradeHistory ? 'Awaiting Trade History' : '+£14,920.40 today'}</span>
               </div>
             </div>
 
@@ -223,11 +275,11 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                 Cash Available (Uninvested)
               </span>
               <span className="font-data-mono-lg text-data-mono-lg text-on-surface tracking-tight my-1 font-semibold">
-                £48,290.15
+                {isMissingTradeHistory ? '£0.00' : '£48,290.15'}
               </span>
               <div className="flex items-center gap-1 font-data-mono-sm text-data-mono-sm text-secondary">
                 <span className="material-symbols-outlined text-[14px]">info</span>
-                <span>7.4% Liquidity buffer</span>
+                <span>{isMissingTradeHistory ? 'Ledger statement loaded' : '7.4% Liquidity buffer'}</span>
               </div>
             </div>
 
@@ -241,7 +293,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
               </span>
               <div className="flex items-center gap-1 font-data-mono-sm text-data-mono-sm text-outline">
                 <span className="material-symbols-outlined text-[14px]">history</span>
-                <span>Net Deposits £520.4k</span>
+                <span>{isMissingTradeHistory ? 'Awaiting Trade History' : 'Net Deposits £520.4k'}</span>
               </div>
             </div>
 
@@ -255,7 +307,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
               </span>
               <div className="flex items-center gap-1 font-data-mono-sm text-data-mono-sm text-primary">
                 <span className="material-symbols-outlined text-[14px]">percent</span>
-                <span>+{pnlPercent}% Portfolio ROI</span>
+                <span>{isMissingTradeHistory ? '0.0% Portfolio ROI' : `+${pnlPercent}% Portfolio ROI`}</span>
               </div>
             </div>
           </div>
@@ -265,17 +317,21 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
             <span className="font-label-caps text-label-caps text-on-surface-variant uppercase">
               Currency Distribution:
             </span>
-            <div className="flex items-center gap-space-md">
-              <span className="px-2 py-0.5 rounded bg-surface-container text-secondary font-data-mono-sm">
-                GBP: 42.1% (£274.9k)
-              </span>
-              <span className="px-2 py-0.5 rounded bg-surface-container text-primary font-data-mono-sm">
-                USD: 49.3% ($408.2k)
-              </span>
-              <span className="px-2 py-0.5 rounded bg-surface-container text-tertiary-fixed font-data-mono-sm">
-                EUR: 8.6% (€64.1k)
-              </span>
-            </div>
+            {isMissingTradeHistory ? (
+              <span className="text-outline text-xs italic">Awaiting Trade History statement to calculate currency exposure</span>
+            ) : (
+              <div className="flex items-center gap-space-md">
+                <span className="px-2 py-0.5 rounded bg-surface-container text-secondary font-data-mono-sm">
+                  GBP: 42.1% (£274.9k)
+                </span>
+                <span className="px-2 py-0.5 rounded bg-surface-container text-primary font-data-mono-sm">
+                  USD: 49.3% ($408.2k)
+                </span>
+                <span className="px-2 py-0.5 rounded bg-surface-container text-tertiary-fixed font-data-mono-sm">
+                  EUR: 8.6% (€64.1k)
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -315,90 +371,108 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
 
           {/* Table Container */}
           <div className="overflow-x-auto">
-            <table className="w-full text-left font-data-mono-sm text-data-mono-sm border-collapse">
-              <thead>
-                <tr className="border-b border-surface-container text-outline uppercase font-label-caps text-[10px]">
-                  <th className="py-2 px-space-sm">Ticker</th>
-                  <th className="py-2 px-space-sm">Instrument Description</th>
-                  <th className="py-2 px-space-sm text-right">Holdings</th>
-                  <th className="py-2 px-space-sm text-right">Market Price</th>
-                  <th className="py-2 px-space-sm text-right">Value (GBP)</th>
-                  <th className="py-2 px-space-sm text-right">Net P&L (GBP)</th>
-                  <th className="py-2 px-space-sm text-center">Trend (7D)</th>
-                  <th className="py-2 px-space-sm text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-surface-container/40">
-                {filteredPositions.map((p, idx) => {
-                  const isPositive = p.pnl_gbp >= 0;
-                  const isSelected = p.ticker === selectedTicker;
-                  return (
-                    <tr
-                      key={p.ticker + idx}
-                      onClick={() => setSelectedTicker(p.ticker)}
-                      className={`hover:bg-surface-container-high/60 cursor-pointer transition-colors ${
-                        isSelected ? 'bg-surface-container-high/90 shadow-[inset_2px_0_0_0_#4edea3]' : ''
-                      }`}
-                    >
-                      <td className="py-2.5 px-space-sm font-semibold text-primary">
-                        {p.ticker}
-                      </td>
-                      <td className="py-2.5 px-space-sm text-on-surface-variant truncate max-w-[180px]">
-                        {p.market}
-                      </td>
-                      <td className="py-2.5 px-space-sm text-right text-on-surface">
-                        {p.quantity.toLocaleString()}
-                      </td>
-                      <td className="py-2.5 px-space-sm text-right text-on-surface-variant">
-                        {p.currency === 'USD' ? '$' : p.currency === 'EUR' ? '€' : '£'}
-                        {(p.current_price || 0).toFixed(2)}
-                      </td>
-                      <td className="py-2.5 px-space-sm text-right text-on-surface font-medium">
-                        £{p.market_value_gbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-2.5 px-space-sm text-right">
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${
-                            isPositive
-                              ? 'bg-primary/10 text-primary border border-primary/20'
-                              : 'bg-error/10 text-error border border-error/20'
-                          }`}
-                        >
-                          {isPositive ? '+' : ''}£{p.pnl_gbp.toFixed(2)}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-space-sm text-center">
-                        <svg className="w-14 h-4 mx-auto" viewBox="0 0 60 16">
-                          <path
-                            d={
+            {isMissingTradeHistory ? (
+              <div className="py-16 px-4 flex flex-col items-center justify-center text-center bg-surface-container-lowest/50 rounded-lg border border-dashed border-outline-variant/40 my-3">
+                <div className="w-12 h-12 rounded-full bg-amber-500/10 text-amber-400 flex items-center justify-center mb-3">
+                  <span className="material-symbols-outlined text-2xl">table_rows</span>
+                </div>
+                <h3 className="font-headline-md text-base text-on-surface font-semibold mb-1">
+                  Missing Trade History
+                </h3>
+                <p className="font-body-sm text-body-sm text-on-surface-variant max-w-md mb-4">
+                  Open positions, current market prices, and unrealized P&L cannot be calculated from <code className="font-mono text-secondary">Transaction*.csv</code> alone.
+                </p>
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-container text-xs font-mono text-outline border border-surface-container-high">
+                  <span className="material-symbols-outlined text-[14px] text-primary">upload_file</span>
+                  Please drop your <strong className="text-primary font-bold">TradeHistory*.csv</strong> file into the Ingestion Deck above.
+                </div>
+              </div>
+            ) : (
+              <table className="w-full text-left font-data-mono-sm text-data-mono-sm border-collapse">
+                <thead>
+                  <tr className="border-b border-surface-container text-outline uppercase font-label-caps text-[10px]">
+                    <th className="py-2 px-space-sm">Ticker</th>
+                    <th className="py-2 px-space-sm">Instrument Description</th>
+                    <th className="py-2 px-space-sm text-right">Holdings</th>
+                    <th className="py-2 px-space-sm text-right">Market Price</th>
+                    <th className="py-2 px-space-sm text-right">Value (GBP)</th>
+                    <th className="py-2 px-space-sm text-right">Net P&L (GBP)</th>
+                    <th className="py-2 px-space-sm text-center">Trend (7D)</th>
+                    <th className="py-2 px-space-sm text-center">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-container/40">
+                  {filteredPositions.map((p, idx) => {
+                    const isPositive = p.pnl_gbp >= 0;
+                    const isSelected = p.ticker === selectedTicker;
+                    return (
+                      <tr
+                        key={p.ticker + idx}
+                        onClick={() => setSelectedTicker(p.ticker)}
+                        className={`hover:bg-surface-container-high/60 cursor-pointer transition-colors ${
+                          isSelected ? 'bg-surface-container-high/90 shadow-[inset_2px_0_0_0_#4edea3]' : ''
+                        }`}
+                      >
+                        <td className="py-2.5 px-space-sm font-semibold text-primary">
+                          {p.ticker}
+                        </td>
+                        <td className="py-2.5 px-space-sm text-on-surface-variant truncate max-w-[180px]">
+                          {p.market}
+                        </td>
+                        <td className="py-2.5 px-space-sm text-right text-on-surface">
+                          {p.quantity.toLocaleString()}
+                        </td>
+                        <td className="py-2.5 px-space-sm text-right text-on-surface-variant">
+                          {p.currency === 'USD' ? '$' : p.currency === 'EUR' ? '€' : '£'}
+                          {(p.current_price || 0).toFixed(2)}
+                        </td>
+                        <td className="py-2.5 px-space-sm text-right text-on-surface font-medium">
+                          £{p.market_value_gbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-2.5 px-space-sm text-right">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${
                               isPositive
-                                ? 'M2 13 L15 11 L28 14 L42 5 L58 3'
-                                : 'M2 4 L16 6 L30 3 L44 12 L58 14'
-                            }
-                            fill="none"
-                            stroke={isPositive ? '#4edea3' : '#ffb4ab'}
-                            strokeWidth="1.5"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                      </td>
-                      <td className="py-2.5 px-space-sm text-center">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedTicker(p.ticker);
-                          }}
-                          className="px-2 py-0.5 rounded bg-surface-container hover:bg-surface-container-highest text-secondary text-[10px] font-label-caps transition-colors"
-                        >
-                          INSPECT
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                                ? 'bg-primary/10 text-primary border border-primary/20'
+                                : 'bg-error/10 text-error border border-error/20'
+                            }`}
+                          >
+                            {isPositive ? '+' : ''}£{p.pnl_gbp.toFixed(2)}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-space-sm text-center">
+                          <svg className="w-14 h-4 mx-auto" viewBox="0 0 60 16">
+                            <path
+                              d={
+                                isPositive
+                                  ? 'M2 13 L15 11 L28 14 L42 5 L58 3'
+                                  : 'M2 4 L16 6 L30 3 L44 12 L58 14'
+                              }
+                              fill="none"
+                              stroke={isPositive ? '#4edea3' : '#ffb4ab'}
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                        </td>
+                        <td className="py-2.5 px-space-sm text-center">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedTicker(p.ticker);
+                            }}
+                            className="px-2 py-0.5 rounded bg-surface-container hover:bg-surface-container-highest text-secondary text-[10px] font-label-caps transition-colors"
+                          >
+                            INSPECT
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
 
@@ -415,80 +489,94 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
 
             {/* SVG Donut Chart */}
             <div className="flex items-center justify-center py-4">
-              <div className="relative w-40 h-40">
-                <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                  {/* Background Track */}
-                  <path
-                    className="text-surface-container-highest"
-                    strokeWidth="4.5"
-                    stroke="currentColor"
-                    fill="none"
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                  />
-                  {/* USD Slice: 49.3% */}
-                  <path
-                    className="text-primary"
-                    strokeDasharray="49.3, 100"
-                    strokeWidth="4.5"
-                    strokeLinecap="round"
-                    stroke="currentColor"
-                    fill="none"
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                  />
-                  {/* GBP Slice: 42.1% */}
-                  <path
-                    className="text-secondary"
-                    strokeDasharray="42.1, 100"
-                    strokeDashoffset="-49.3"
-                    strokeWidth="4.5"
-                    strokeLinecap="round"
-                    stroke="currentColor"
-                    fill="none"
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                  />
-                  {/* EUR Slice: 8.6% */}
-                  <path
-                    className="text-tertiary-fixed"
-                    strokeDasharray="8.6, 100"
-                    strokeDashoffset="-91.4"
-                    strokeWidth="4.5"
-                    strokeLinecap="round"
-                    stroke="currentColor"
-                    fill="none"
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                  />
-                </svg>
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                  <span className="font-data-mono-lg text-data-mono-lg font-bold text-on-surface">100%</span>
-                  <span className="font-label-caps text-[9px] text-outline uppercase">Allocated</span>
+              {isMissingTradeHistory ? (
+                <div className="flex flex-col items-center justify-center h-40 text-center text-outline">
+                  <span className="material-symbols-outlined text-3xl mb-1 text-outline/50">pie_chart</span>
+                  <span className="font-mono text-xs">Awaiting Trade History</span>
+                  <span className="text-[10px] text-outline/60 mt-0.5">No holdings to allocate</span>
                 </div>
-              </div>
+              ) : (
+                <div className="relative w-40 h-40">
+                  <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
+                    {/* Background Track */}
+                    <path
+                      className="text-surface-container-highest"
+                      strokeWidth="4.5"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                    {/* USD Slice: 49.3% */}
+                    <path
+                      className="text-primary"
+                      strokeDasharray="49.3, 100"
+                      strokeWidth="4.5"
+                      strokeLinecap="round"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                    {/* GBP Slice: 42.1% */}
+                    <path
+                      className="text-secondary"
+                      strokeDasharray="42.1, 100"
+                      strokeDashoffset="-49.3"
+                      strokeWidth="4.5"
+                      strokeLinecap="round"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                    {/* EUR Slice: 8.6% */}
+                    <path
+                      className="text-tertiary-fixed"
+                      strokeDasharray="8.6, 100"
+                      strokeDashoffset="-91.4"
+                      strokeWidth="4.5"
+                      strokeLinecap="round"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                    <span className="font-data-mono-lg text-data-mono-lg font-bold text-on-surface">100%</span>
+                    <span className="font-label-caps text-[9px] text-outline uppercase">Allocated</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Currency Breakdown Legend */}
-            <div className="space-y-2 mt-2">
-              <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-primary" />
-                  <span className="font-body-sm text-xs text-on-surface font-medium">US Dollar (USD)</span>
-                </div>
-                <span className="font-data-mono-sm text-xs text-on-surface">49.3% • £321.9k</span>
+            {isMissingTradeHistory ? (
+              <div className="p-3 text-center text-outline font-mono text-xs bg-surface-container-lowest rounded border border-surface-container/30">
+                Awaiting TradeHistory*.csv
               </div>
-              <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-secondary" />
-                  <span className="font-body-sm text-xs text-on-surface font-medium">British Pound (GBP)</span>
+            ) : (
+              <div className="space-y-2 mt-2">
+                <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-primary" />
+                    <span className="font-body-sm text-xs text-on-surface font-medium">US Dollar (USD)</span>
+                  </div>
+                  <span className="font-data-mono-sm text-xs text-on-surface">49.3% • £321.9k</span>
                 </div>
-                <span className="font-data-mono-sm text-xs text-on-surface">42.1% • £274.9k</span>
-              </div>
-              <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-tertiary-fixed" />
-                  <span className="font-body-sm text-xs text-on-surface font-medium">Euro (EUR)</span>
+                <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-secondary" />
+                    <span className="font-body-sm text-xs text-on-surface font-medium">British Pound (GBP)</span>
+                  </div>
+                  <span className="font-data-mono-sm text-xs text-on-surface">42.1% • £274.9k</span>
                 </div>
-                <span className="font-data-mono-sm text-xs text-on-surface">8.6% • £56.2k</span>
+                <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-tertiary-fixed" />
+                    <span className="font-body-sm text-xs text-on-surface font-medium">Euro (EUR)</span>
+                  </div>
+                  <span className="font-data-mono-sm text-xs text-on-surface">8.6% • £56.2k</span>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="mt-4 pt-3 border-t border-surface-container/40 text-[11px] text-outline font-mono flex items-center justify-between">
@@ -502,18 +590,30 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
           MIDDLE SECTION 2: Single Instrument Inspector (Interactive)
       ───────────────────────────────────────────────────────────── */}
       <div className="bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-space-sm border-b border-surface-container/40 mb-space-sm">
-          <div className="flex items-center gap-space-sm">
-            <span className="material-symbols-outlined text-[20px] text-primary">insights</span>
-            <div>
-              <span className="font-headline-md text-headline-md text-on-surface font-semibold">
-                Single Instrument Inspector & Execution Blotter
-              </span>
-              <div className="font-label-caps text-[10px] text-outline">
-                FOCUSED INSTRUMENT: {selectedHolding.ticker} • {selectedHolding.market}
-              </div>
-            </div>
+        {!selectedHolding ? (
+          <div className="py-12 px-4 flex flex-col items-center justify-center text-center">
+            <span className="material-symbols-outlined text-3xl text-outline mb-2">query_stats</span>
+            <span className="font-headline-md text-sm text-on-surface font-medium">Single Instrument Inspector</span>
+            <span className="font-body-sm text-xs text-on-surface-variant max-w-sm mt-1">
+              {isMissingTradeHistory
+                ? 'Missing Trade History: Upload Trade*.csv to view execution trajectory and holding analytics.'
+                : 'No instrument selected.'}
+            </span>
           </div>
+        ) : (
+          <div>
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-space-sm border-b border-surface-container/40 mb-space-sm">
+              <div className="flex items-center gap-space-sm">
+                <span className="material-symbols-outlined text-[20px] text-primary">insights</span>
+                <div>
+                  <span className="font-headline-md text-headline-md text-on-surface font-semibold">
+                    Single Instrument Inspector & Execution Blotter
+                  </span>
+                  <div className="font-label-caps text-[10px] text-outline">
+                    FOCUSED INSTRUMENT: {selectedHolding.ticker} • {selectedHolding.market}
+                  </div>
+                </div>
+              </div>
 
           {/* Instrument Dropdown Selector */}
           <div className="flex items-center gap-space-sm">
@@ -678,6 +778,8 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
           </div>
         </div>
       </div>
+        )}
+      </div>
 
       {/* ─────────────────────────────────────────────────────────────
           MIDDLE SECTION 3: Trade History This Quarter
@@ -744,39 +846,49 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-container/30">
-              {filteredActivity.map((act, idx) => (
-                <tr key={idx} className="hover:bg-surface-container-high/40">
-                  <td className="py-2 px-space-sm">
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        act.activity === 'BUY'
-                          ? 'bg-primary/10 text-primary border border-primary/20'
-                          : 'bg-error/10 text-error border border-error/20'
-                      }`}
-                    >
-                      {act.activity}
-                    </span>
-                  </td>
-                  <td className="py-2 px-space-sm text-on-surface font-medium">
-                    {act.market}
-                  </td>
-                  <td className="py-2 px-space-sm text-right text-on-surface">
-                    {act.qty}
-                  </td>
-                  <td className="py-2 px-space-sm text-right text-on-surface-variant">
-                    {act.fill}
-                  </td>
-                  <td className="py-2 px-space-sm text-right font-semibold text-on-surface">
-                    {act.value}
-                  </td>
-                  <td className="py-2 px-space-sm text-outline">
-                    {act.date}
-                  </td>
-                  <td className="py-2 px-space-sm text-outline">
-                    {act.time}
+              {filteredActivity.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="text-center py-8 text-on-surface-variant font-mono text-xs">
+                    {isMissingTradeHistory
+                      ? 'No trade activity available (Missing Trade History statement).'
+                      : 'No activity matches the current filter.'}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredActivity.map((act, idx) => (
+                  <tr key={idx} className="hover:bg-surface-container-high/40">
+                    <td className="py-2 px-space-sm">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          act.activity === 'BUY'
+                            ? 'bg-primary/10 text-primary border border-primary/20'
+                            : 'bg-error/10 text-error border border-error/20'
+                        }`}
+                      >
+                        {act.activity}
+                      </span>
+                    </td>
+                    <td className="py-2 px-space-sm text-on-surface font-medium">
+                      {act.market}
+                    </td>
+                    <td className="py-2 px-space-sm text-right text-on-surface">
+                      {act.qty}
+                    </td>
+                    <td className="py-2 px-space-sm text-right text-on-surface-variant">
+                      {act.fill}
+                    </td>
+                    <td className="py-2 px-space-sm text-right font-semibold text-on-surface">
+                      {act.value}
+                    </td>
+                    <td className="py-2 px-space-sm text-outline">
+                      {act.date}
+                    </td>
+                    <td className="py-2 px-space-sm text-outline">
+                      {act.time}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
