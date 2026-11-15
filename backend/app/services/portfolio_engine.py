@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from backend.app.services.market_service import get_current_prices, get_historical_fx
-from backend.app.services.ticker_service import load_ticker_mappings
+from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker
 from backend.app.core.config import settings
 
 def convert_to_gbp(row: pd.Series, gbpusd_rate: float, gbpeur_rate: float) -> float:
@@ -24,7 +24,7 @@ def calculate_positions_from_df(df_trade_history: pd.DataFrame) -> Dict[str, Any
     if 'TextDate' in df.columns:
         df['Date'] = pd.to_datetime(df['TextDate'], errors='coerce', dayfirst=True)
 
-    df['Ticker'] = df['Market'].map(ticker_map)
+    df['Ticker'] = df['Market'].map(lambda name: resolve_ticker(name, ticker_map))
     df_valid = df[df['Ticker'].notnull()].copy()
 
     if df_valid.empty:

@@ -13,6 +13,23 @@ def load_ticker_mappings() -> Dict[str, str]:
             return {}
     return {}
 
+
+def resolve_ticker(raw_name: str, mappings: Dict[str, str]) -> Optional[str]:
+    """
+    Resolve a broker instrument name to its current ticker, following
+    ticker -> ticker remap entries left behind by corporate actions
+    (e.g. "Skillz Inc" -> "SKLZ" -> "FIRY").
+    """
+    ticker = mappings.get(raw_name)
+    if ticker is None:
+        return None
+    seen = {raw_name}
+    while ticker in mappings and ticker not in seen:
+        seen.add(ticker)
+        ticker = mappings[ticker]
+    return ticker
+
+
 def save_ticker_mappings(mappings: Dict[str, str]) -> Dict[str, str]:
     filepath = settings.TICKER_MAP_FILE
     current = load_ticker_mappings()
