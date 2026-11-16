@@ -42,7 +42,15 @@ def run_dev():
         backend_proc.terminate()
 
 def run_start():
-    """Serve the application via FastAPI."""
+    """Serve the application via FastAPI. Build the frontend then serve it and the API via FASTAPI"""
+    print("Building frontend   npm run build   ... ")
+    try:
+        build = subprocess.run(["npm", "run", "build"], cwd=os.path.join(REPO_ROOT, "frontend"))
+    except FileNotFoundError:
+        sys.exit("npm not found, install Node.js or use `python cli.py dev`")
+    if build.returncode != 0:
+        sys.exit("npm run build failed, fix error above")
+        
     print("⚡ Serving Portfolio Analytics Web App on http://localhost:8000 ...")
     webbrowser.open("http://localhost:8000")
     subprocess.run([

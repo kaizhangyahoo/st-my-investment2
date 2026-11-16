@@ -18,4 +18,5 @@ trading212/*.csv
 terraform.log
 terraform/terraform.tfstate.backup
 **/node_modules/*
+frontend/dist/*
 mcp.json

@@ -33,7 +33,7 @@ def health_check():
     return {"status": "ok", "app": settings.PROJECT_NAME}
 
 # Mount static files in production if frontend build exists
-frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../frontend/dist"))
+frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../frontend/dist"))
 if os.path.exists(frontend_dist):
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="static")
 
