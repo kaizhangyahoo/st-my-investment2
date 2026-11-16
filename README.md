@@ -113,7 +113,7 @@ flowchart TB
 ## 🚀 Quickstart & Developer Guide
 
 ### 1. Prerequisites
-- Python 3.10+
+- Python 3.11+
 - Node.js 18+ and npm
 
 ### 2. Environment Setup
@@ -121,11 +121,19 @@ flowchart TB
 # Backend environment variables
 cp backend/.env.example backend/.env
 
-# Local secrets & Stitch MCP API Key (gitignored)
+# Local secrets & Stitch MCP API Key (gitignored and optional)
 cp .env.example .env
 ```
 
-### 3. Running Locally
+
+### 3. Building Frontend and Backend assets
+```bash
+pip install -r ./backend/requirements.txt
+npm install -w ./frontend # check repo accessibility, eg npm install might require login
+npm run dev # or npm run build for production mode
+```
+
+### 4. Running Locally
 
 ```bash
 # Option A: Start development mode (FastAPI on :8000 + Vite on :5173 with auto-reload)
@@ -135,12 +143,6 @@ python cli.py dev
 python cli.py start
 ```
 
-### 4. Building Frontend Assets
-```bash
-cd frontend
-npm install
-npm run build
-```
 
 ---
 
