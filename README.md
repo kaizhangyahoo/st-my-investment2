@@ -113,35 +113,52 @@ flowchart TB
 ## 🚀 Quickstart & Developer Guide
 
 ### 1. Prerequisites
-- Python 3.11+
+- Python 3.11+ (3.12 recommended — dependencies are unpinned, and `pandas>=2.0.0` resolves to pandas 3.x on newer interpreters)
 - Node.js 18+ and npm
 
-### 2. Environment Setup
+### 2. Python environment
+`.venv/` at the repo root is the environment that `pyproject.toml` (pyrefly) and `.vscode/settings.json` expect:
 ```bash
-# Backend environment variables
+python3.12 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Environment variables
+```bash
+# Backend settings, Firebase, broker/market-data keys, JWT secret
 cp backend/.env.example backend/.env
 
-# Local secrets & Stitch MCP API Key (gitignored and optional)
-cp .env.example .env
+# Optional, only for the Google Stitch MCP integration (gitignored, no template committed)
+echo 'STITCH_API_KEY=your-key-here' > .env
 ```
 
-
-### 3. Building Frontend and Backend assets
+### 4. Installing dependencies
 ```bash
-pip install -r ./backend/requirements.txt
-npm install -w ./frontend # check repo accessibility, eg npm install might require login
-npm run dev # or npm run build for production mode
+pip install -r backend/requirements.txt   # FastAPI, Pydantic, pandas
+pip install -r requirements.txt           # legacy root modules the backend still imports
+npm install --prefix frontend
 ```
+> **Both requirements files are required.** The backend reaches legacy root modules at runtime —
+> `getEODprice.py` imports `streamlit` at module level and `firebase_service.py` needs
+> `firebase-admin`, neither of which is in `backend/requirements.txt`. `market_service.py` and
+> `auth_service.py` swallow the resulting `ImportError`, so a backend-only install starts fine but
+> returns `None` for every live quote.
 
-### 4. Running Locally
+> **Behind a corporate package mirror,** `npm install` and `pip install` may fail even though the
+> packages resolve: `frontend/package-lock.json` pins `registry.npmjs.org` URLs that an
+> Artifactory-backed `.npmrc` cannot fetch (so `npm ci` is unusable), and pip can 403 on
+> individual versions that the mirror has not cached — pin to a nearby version when that happens.
 
+### 5. Running locally
 ```bash
-# Option A: Start development mode (FastAPI on :8000 + Vite on :5173 with auto-reload)
+# Option A: Development mode — FastAPI on :8000 and Vite on :5173, both with auto-reload
 python cli.py dev
 
-# Option B: Serve the production build directly from FastAPI on port 8000
+# Option B: Production build served directly from FastAPI on :8000 (runs npm run build first)
 python cli.py start
 ```
+Both options launch the frontend for you; there is no need to run `npm run dev` separately. To
+build the bundle on its own, use `npm run build --prefix frontend` (outputs to `frontend/dist`).
 
 
 ---
