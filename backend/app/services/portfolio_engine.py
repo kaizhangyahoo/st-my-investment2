@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from backend.app.services.market_service import get_current_prices, get_historical_fx
-from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker
+from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker, find_unresolved_symbols
 from backend.app.core.config import settings
 
 def convert_to_gbp(row: pd.Series, gbpusd_rate: float, gbpeur_rate: float) -> float:
@@ -27,13 +27,18 @@ def calculate_positions_from_df(df_trade_history: pd.DataFrame) -> Dict[str, Any
     df['Ticker'] = df['Market'].map(lambda name: resolve_ticker(name, ticker_map))
     df_valid = df[df['Ticker'].notnull()].copy()
 
+    unresolved_symbols = find_unresolved_symbols(df['Market'].tolist())
+    excluded_row_count = int(len(df) - len(df_valid))
+
     if df_valid.empty:
         return {
             "total_market_value_gbp": 0.0,
             "total_invested_cash": 0.0,
             "total_pnl_gbp": 0.0,
             "currency_allocation": {"usd_gbp": 0.0, "eur_gbp": 0.0, "gbp": 0.0, "total_gbp": 0.0},
-            "positions": []
+            "positions": [],
+            "unresolved_symbols": unresolved_symbols,
+            "excluded_row_count": excluded_row_count,
         }
 
     grouped = df_valid.groupby('Ticker').agg({
@@ -91,7 +96,9 @@ def calculate_positions_from_df(df_trade_history: pd.DataFrame) -> Dict[str, Any
             "gbp": gbp_val,
             "total_gbp": total_market_value_gbp
         },
-        "positions": positions_list
+        "positions": positions_list,
+        "unresolved_symbols": unresolved_symbols,
+        "excluded_row_count": excluded_row_count,
     }
 
 def calculate_cashflow_waterfall(df_transactions: pd.DataFrame) -> List[Dict[str, Any]]:

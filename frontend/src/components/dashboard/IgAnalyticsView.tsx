@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { portfolioApi } from '../../services/api';
-import { PortfolioSummary, Position } from '../../types';
+import { PortfolioSummary, Position, UploadResult } from '../../types';
 
 interface IgAnalyticsViewProps {
   summary: PortfolioSummary | null;
-  onRefresh: () => void;
   onReset: () => void;
+  onUploadComplete: (res: UploadResult) => void;
 }
 
 // Default institutional fallback dataset matching Stitch design
@@ -34,8 +34,8 @@ const SAMPLE_TRADE_ACTIVITY = [
 
 export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   summary,
-  onRefresh,
   onReset,
+  onUploadComplete,
 }) => {
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -56,7 +56,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
       } else {
         const fileNames = acceptedFiles.map((f) => f.name);
         setUploadedFiles(fileNames);
-        onRefresh();
+        onUploadComplete(res);
       }
     } catch (err: any) {
       setUploadError(err?.message || 'Failed to parse CSV statement');
@@ -88,6 +88,9 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
       uploadedFiles.some((f) => /trans/i.test(f)) &&
       !uploadedFiles.some((f) => /trade/i.test(f)))
   );
+
+  const unresolvedSymbols = summary?.unresolved_symbols ?? [];
+  const hasExcludedRows = Boolean(summary?.excluded_row_count && unresolvedSymbols.length > 0);
 
   // Calculate or fallback data
   const hasLivePositions = summary && summary.positions && summary.positions.length > 0;
@@ -250,6 +253,31 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
               BASE: GBP (£) • SPOT 15:26 BST
             </span>
           </div>
+
+          {hasExcludedRows && (
+            <div className="mb-space-sm text-xs font-mono bg-error-container/20 border border-error/40 p-2.5 rounded-lg flex items-start gap-2">
+              <span className="material-symbols-outlined text-[16px] text-error mt-0.5 shrink-0">
+                error
+              </span>
+              <div>
+                <span className="font-semibold block text-[11px] text-error">
+                  Figures below exclude {summary?.excluded_row_count} trade row
+                  {summary?.excluded_row_count === 1 ? '' : 's'}
+                </span>
+                <span className="text-[10px] text-on-surface-variant leading-tight block mt-0.5">
+                  {unresolvedSymbols.length} instrument name
+                  {unresolvedSymbols.length === 1 ? '' : 's'} could not be resolved to a ticker, so
+                  their cost basis and market value are omitted. Market value, invested cash and P&L
+                  are all understated. Map them in{' '}
+                  <span className="text-primary font-bold">Reference Data</span> to correct these
+                  totals.
+                </span>
+                <span className="text-[10px] text-on-surface-variant block mt-1 truncate">
+                  Unmapped: {unresolvedSymbols.map((s) => s.market_name).join(', ')}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* 4 Primary KPI Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-space-sm py-space-xs">

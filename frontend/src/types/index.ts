@@ -32,6 +32,11 @@ export interface TradeActivityItem {
   market: string;
 }
 
+export interface UnresolvedSymbol {
+  market_name: string;
+  row_count: number;
+}
+
 export interface PortfolioSummary {
   total_market_value_gbp: number;
   total_invested_cash: number;
@@ -42,6 +47,16 @@ export interface PortfolioSummary {
   transaction_file?: string | null;
   trade_activities?: TradeActivityItem[];
   missing_trade_history?: boolean;
+  unresolved_symbols?: UnresolvedSymbol[];
+  excluded_row_count?: number;
+}
+
+export interface UploadResult {
+  trade_files: string[];
+  transaction_files: string[];
+  errors: string[];
+  missing_trade_history: boolean;
+  unresolved_symbols: UnresolvedSymbol[];
 }
 
 export interface PortfolioHistoryPoint {

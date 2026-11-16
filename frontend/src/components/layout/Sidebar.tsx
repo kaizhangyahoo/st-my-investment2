@@ -7,6 +7,7 @@ interface SidebarProps {
   onSelectTab: (tab: WorkspaceTab) => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  unresolvedCount?: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -14,6 +15,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   isCollapsed,
   onToggleCollapse,
+  unresolvedCount = 0,
 }) => {
   return (
     <aside
@@ -97,15 +99,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ? 'bg-surface-container-high text-primary font-medium shadow-[inset_2px_0_0_0_#4edea3]'
                 : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
             }`}
-            title="Reference Data & Ticker Mapping"
+            title={
+              unresolvedCount > 0
+                ? `Reference Data & Ticker Mapping — ${unresolvedCount} unmapped symbol(s)`
+                : 'Reference Data & Ticker Mapping'
+            }
           >
             <div className="flex items-center gap-space-md overflow-hidden">
-              <span className="material-symbols-outlined text-[18px] text-secondary flex-shrink-0">tune</span>
+              <span className="relative flex-shrink-0">
+                <span className="material-symbols-outlined text-[18px] text-secondary">tune</span>
+                {isCollapsed && unresolvedCount > 0 && (
+                  <span className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-error" />
+                )}
+              </span>
               {!isCollapsed && <span className="font-body-md text-body-md truncate">Reference Data</span>}
             </div>
             {!isCollapsed && (
-              <span className="px-1.5 py-0.5 rounded bg-surface-container-highest text-secondary font-label-caps text-[10px]">
-                METADATA
+              <span
+                className={`px-1.5 py-0.5 rounded font-label-caps text-[10px] ${
+                  unresolvedCount > 0
+                    ? 'bg-error-container text-on-error-container font-bold'
+                    : 'bg-surface-container-highest text-secondary'
+                }`}
+              >
+                {unresolvedCount > 0 ? `${unresolvedCount} UNMAPPED` : 'METADATA'}
               </span>
             )}
           </button>

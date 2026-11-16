@@ -5,13 +5,15 @@ import { IgAnalyticsView } from './IgAnalyticsView';
 import { T212View } from '../trading212/T212View';
 import { TickerMappingView } from '../tickers/TickerMappingView';
 import { PerformanceBlotterView } from './PerformanceBlotterView';
+import { UnresolvedSymbolsModal } from '../tickers/UnresolvedSymbolsModal';
 import { portfolioApi } from '../../services/api';
-import { PortfolioSummary } from '../../types';
+import { PortfolioSummary, UnresolvedSymbol, UploadResult } from '../../types';
 
 export const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('ig-csv-analysis');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
+  const [gateSymbols, setGateSymbols] = useState<UnresolvedSymbol[]>([]);
 
   const loadData = async () => {
     try {
@@ -25,6 +27,26 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Gate the valuation behind mapping review: hold the summary back until the
+  // user has either resolved the unmapped names or explicitly skipped them.
+  const handleUploadComplete = (res: UploadResult) => {
+    if (res.unresolved_symbols?.length) {
+      setGateSymbols(res.unresolved_symbols);
+      return;
+    }
+    loadData();
+  };
+
+  const handleGateResolved = () => {
+    setGateSymbols([]);
+    loadData();
+  };
+
+  const handleGateSkipped = () => {
+    setGateSymbols([]);
+    loadData();
+  };
 
   const handleResetPanels = async () => {
     setSummary(null);
@@ -44,6 +66,7 @@ export const Dashboard: React.FC = () => {
         onSelectTab={setActiveTab}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+        unresolvedCount={summary?.unresolved_symbols?.length ?? 0}
       />
 
       {/* Top Fixed Header */}
@@ -65,18 +88,30 @@ export const Dashboard: React.FC = () => {
           {activeTab === 'ig-csv-analysis' && (
             <IgAnalyticsView
               summary={summary}
-              onRefresh={loadData}
               onReset={handleResetPanels}
+              onUploadComplete={handleUploadComplete}
             />
           )}
 
           {activeTab === 'trading-212-api' && <T212View />}
 
-          {activeTab === 'reference-data' && <TickerMappingView />}
+          {activeTab === 'reference-data' && (
+            <TickerMappingView
+              unresolvedSymbols={summary?.unresolved_symbols ?? []}
+              onMappingsChanged={loadData}
+            />
+          )}
 
           {activeTab === 'performance-blotter' && <PerformanceBlotterView />}
         </div>
       </main>
+
+      <UnresolvedSymbolsModal
+        open={gateSymbols.length > 0}
+        symbols={gateSymbols}
+        onResolved={handleGateResolved}
+        onSkip={handleGateSkipped}
+      />
     </div>
   );
 };

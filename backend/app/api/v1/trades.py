@@ -8,6 +8,7 @@ import re
 from datetime import datetime
 
 from backend.app.services.portfolio_engine import calculate_positions_from_df, calculate_cashflow_waterfall
+from backend.app.services.ticker_service import find_unresolved_symbols
 from backend.app.schemas.portfolio import PortfolioSummary, CashflowItem, TradeActivityItem
 from backend.app.core.security import get_current_user
 
@@ -167,6 +168,13 @@ async def upload_files(files: List[UploadFile] = File(...), user: dict = Depends
         _LAST_TRADE_FILENAME.pop(user_id, None)
 
     results["missing_trade_history"] = (user_id not in _LAST_TRADE_DF) and (user_id in _LAST_TRANSACTION_DF)
+
+    trade_df = _LAST_TRADE_DF.get(user_id)
+    if trade_df is not None and "Market" in trade_df.columns:
+        results["unresolved_symbols"] = find_unresolved_symbols(trade_df["Market"].tolist())
+    else:
+        results["unresolved_symbols"] = []
+
     return results
 
 @router.get("/summary", response_model=PortfolioSummary)

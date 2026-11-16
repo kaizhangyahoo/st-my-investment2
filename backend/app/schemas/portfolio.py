@@ -25,6 +25,10 @@ class TradeActivityItem(BaseModel):
     activity: str
     market: str
 
+class UnresolvedSymbol(BaseModel):
+    market_name: str
+    row_count: int
+
 class PortfolioSummary(BaseModel):
     total_market_value_gbp: float
     total_invested_cash: float
@@ -35,6 +39,8 @@ class PortfolioSummary(BaseModel):
     transaction_file: Optional[str] = None
     trade_activities: Optional[List[TradeActivityItem]] = None
     missing_trade_history: bool = False
+    unresolved_symbols: List[UnresolvedSymbol] = []
+    excluded_row_count: int = 0
 
 class PortfolioHistoryPoint(BaseModel):
     date: str

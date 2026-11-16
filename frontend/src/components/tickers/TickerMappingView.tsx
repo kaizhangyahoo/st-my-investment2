@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { tickersApi } from '../../services/api';
+import { UnresolvedSymbol } from '../../types';
 
-export const TickerMappingView: React.FC = () => {
+interface TickerMappingViewProps {
+  unresolvedSymbols?: UnresolvedSymbol[];
+  onMappingsChanged?: () => void;
+}
+
+export const TickerMappingView: React.FC<TickerMappingViewProps> = ({
+  unresolvedSymbols = [],
+  onMappingsChanged,
+}) => {
   const [mappings, setMappings] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -38,6 +47,7 @@ export const TickerMappingView: React.FC = () => {
       setNewVal('');
       setSaveStatus('MAPPING COMMITTED TO DISK (company_name_to_ticker.json)');
       setTimeout(() => setSaveStatus(null), 3000);
+      onMappingsChanged?.();
     } catch {
       setSaveStatus('ERROR: Failed to save mapping');
     }
@@ -56,11 +66,10 @@ export const TickerMappingView: React.FC = () => {
   };
 
   const handleRunSecResolve = async () => {
+    if (unresolvedSymbols.length === 0) return;
     setResolving(true);
     try {
-      // Find sample unmapped symbols
-      const testNames = ['Apple Inc', 'Microsoft Corp', 'Palantir Technologies'];
-      const res = await tickersApi.resolve(testNames);
+      const res = await tickersApi.resolve(unresolvedSymbols.map((s) => s.market_name));
       setResolveResults(res);
     } catch (err) {
       console.error('SEC resolution failed', err);
@@ -76,6 +85,7 @@ export const TickerMappingView: React.FC = () => {
     const newRes = { ...resolveResults };
     delete newRes[name];
     setResolveResults(newRes);
+    onMappingsChanged?.();
   };
 
   const mappingEntries = Object.entries(mappings).filter(
@@ -107,11 +117,20 @@ export const TickerMappingView: React.FC = () => {
           <button
             type="button"
             onClick={handleRunSecResolve}
-            disabled={resolving}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-surface-container-highest hover:bg-surface-container text-secondary text-xs font-mono font-medium transition-colors border border-secondary/30"
+            disabled={resolving || unresolvedSymbols.length === 0}
+            title={
+              unresolvedSymbols.length === 0
+                ? 'No unmapped symbols in the loaded trade history'
+                : `Resolve ${unresolvedSymbols.length} unmapped symbol(s) via SEC EDGAR`
+            }
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-surface-container-highest hover:bg-surface-container text-secondary text-xs font-mono font-medium transition-colors border border-secondary/30 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <span className="material-symbols-outlined text-[15px]">travel_explore</span>
-            <span>{resolving ? 'QUERYING SEC...' : 'RUN SEC RESOLVER'}</span>
+            <span>
+              {resolving
+                ? 'QUERYING SEC...'
+                : `RUN SEC RESOLVER${unresolvedSymbols.length > 0 ? ` (${unresolvedSymbols.length})` : ''}`}
+            </span>
           </button>
           <button
             type="button"
@@ -130,16 +149,36 @@ export const TickerMappingView: React.FC = () => {
         <div className="p-3 rounded-lg bg-surface-container-low border border-surface-container/60 shadow-sm">
           <span className="font-label-caps text-[10px] text-outline uppercase block">Active Mapped Taxonomy</span>
           <span className="font-data-mono-lg text-sm text-primary font-bold my-1 block">
-            {Object.keys(mappings).length} Verified Pairs
+            {Object.keys(mappings).length} Stored Pairs
           </span>
-          <span className="font-data-mono-sm text-[10px] text-outline">100% Normalized</span>
+          <span className="font-data-mono-sm text-[10px] text-outline">
+            {unresolvedSymbols.length === 0 ? 'Covers loaded history' : 'Incomplete coverage'}
+          </span>
         </div>
-        <div className="p-3 rounded-lg bg-surface-container-low border border-surface-container/60 shadow-sm">
+        <div
+          className={`p-3 rounded-lg border shadow-sm ${
+            unresolvedSymbols.length > 0
+              ? 'bg-error-container/20 border-error/40'
+              : 'bg-surface-container-low border-surface-container/60'
+          }`}
+        >
           <span className="font-label-caps text-[10px] text-outline uppercase block">Pending Ingestion</span>
-          <span className="font-data-mono-lg text-sm text-secondary font-bold my-1 block">
-            {Object.keys(resolveResults).length} Unresolved
+          <span
+            className={`font-data-mono-lg text-sm font-bold my-1 block ${
+              unresolvedSymbols.length > 0 ? 'text-error' : 'text-primary'
+            }`}
+          >
+            {unresolvedSymbols.length} Unresolved
           </span>
-          <span className="font-data-mono-sm text-[10px] text-secondary">Awaiting Review</span>
+          <span
+            className={`font-data-mono-sm text-[10px] ${
+              unresolvedSymbols.length > 0 ? 'text-error' : 'text-outline'
+            }`}
+          >
+            {unresolvedSymbols.length > 0
+              ? `${unresolvedSymbols.reduce((a, s) => a + s.row_count, 0)} trade rows excluded`
+              : 'Loaded history fully mapped'}
+          </span>
         </div>
         <div className="p-3 rounded-lg bg-surface-container-low border border-surface-container/60 shadow-sm">
           <span className="font-label-caps text-[10px] text-outline uppercase block">Ingestion Source</span>
@@ -160,43 +199,51 @@ export const TickerMappingView: React.FC = () => {
       {/* ─────────────────────────────────────────────────────────────
           2. PENDING RESOLUTION ALERT SECTION
       ───────────────────────────────────────────────────────────── */}
-      {Object.keys(resolveResults).length > 0 && (
-        <div className="p-space-md rounded-xl bg-surface-container-low border border-secondary/40 shadow-sm space-y-3">
+      {unresolvedSymbols.length > 0 && (
+        <div className="p-space-md rounded-xl bg-surface-container-low border border-error/40 shadow-sm space-y-3">
           <div className="flex items-center justify-between pb-space-xs border-b border-surface-container/40">
             <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-[18px] text-secondary">notification_important</span>
+              <span className="material-symbols-outlined text-[18px] text-error">notification_important</span>
               <span className="font-headline-md text-sm text-on-surface font-semibold">
-                SEC EDGAR Ingestion Resolution Candidates
+                Unmapped Symbols in Loaded Trade History
               </span>
             </div>
-            <span className="font-label-caps text-[10px] text-secondary uppercase font-mono">
-              SUGGESTED MAPPINGS
+            <span className="font-label-caps text-[10px] text-error uppercase font-mono">
+              EXCLUDED FROM VALUATION
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-space-sm">
-            {Object.entries(resolveResults).map(([name, ticker]) => (
+            {unresolvedSymbols.map(({ market_name: name, row_count }) => {
+              const ticker = resolveResults[name];
+              return (
               <div
                 key={name}
-                className="p-3 rounded bg-surface-container-lowest border border-surface-container/50 flex items-center justify-between"
+                className="p-3 rounded bg-surface-container-lowest border border-surface-container/50 flex items-center justify-between gap-2"
               >
-                <div>
-                  <span className="font-body-sm text-xs text-on-surface font-medium block">{name}</span>
-                  <span className="font-data-mono-sm text-xs text-primary font-bold">
-                    Suggested: {ticker || 'UNRESOLVED'}
+                <div className="min-w-0">
+                  <span className="font-body-sm text-xs text-on-surface font-medium block truncate">{name}</span>
+                  <span className="font-data-mono-sm text-[10px] text-outline block">
+                    {row_count} trade row{row_count === 1 ? '' : 's'} excluded
                   </span>
+                  {name in resolveResults && (
+                    <span className="font-data-mono-sm text-xs text-primary font-bold">
+                      Suggested: {ticker || 'NO SEC MATCH'}
+                    </span>
+                  )}
                 </div>
                 {ticker && (
                   <button
                     type="button"
                     onClick={() => handleAcceptResolve(name, ticker)}
-                    className="px-2.5 py-1 rounded bg-primary-container hover:bg-primary text-on-primary-container text-xs font-mono font-bold transition-colors"
+                    className="px-2.5 py-1 rounded bg-primary-container hover:bg-primary text-on-primary-container text-xs font-mono font-bold transition-colors shrink-0"
                   >
                     ACCEPT
                   </button>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -248,6 +295,9 @@ export const TickerMappingView: React.FC = () => {
                   const isLondon = ticker.endsWith('.L');
                   const isGermany = ticker.endsWith('.DE');
                   const mic = isLondon ? 'XLON (LSE)' : isGermany ? 'XETR (Xetra)' : 'XNYS / XNAS';
+                  // A ticker that is itself a key resolves onwards via a corporate-action chain.
+                  const isRemapped = ticker in mappings;
+                  const isBlank = !ticker.trim();
                   return (
                     <tr key={marketName} className="hover:bg-surface-container-high/40">
                       <td className="py-2.5 px-space-sm text-on-surface font-medium truncate max-w-[240px]">
@@ -260,9 +310,22 @@ export const TickerMappingView: React.FC = () => {
                         {mic}
                       </td>
                       <td className="py-2.5 px-space-sm">
-                        <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 text-[10px] font-bold">
-                          100% MATCH
-                        </span>
+                        {isBlank ? (
+                          <span className="px-1.5 py-0.5 rounded bg-error/10 text-error border border-error/20 text-[10px] font-bold">
+                            BLANK
+                          </span>
+                        ) : isRemapped ? (
+                          <span
+                            className="px-1.5 py-0.5 rounded bg-secondary/10 text-secondary border border-secondary/20 text-[10px] font-bold"
+                            title={`Resolves onwards via ${ticker} → ${mappings[ticker]}`}
+                          >
+                            REMAPPED
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 text-[10px] font-bold">
+                            MAPPED
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-space-sm text-right">
                         <button

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { PortfolioSummary, PortfolioHistoryPoint, CashflowItem, UserProfile } from '../types';
+import { PortfolioSummary, PortfolioHistoryPoint, CashflowItem, UserProfile, UploadResult } from '../types';
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -28,7 +28,7 @@ export const portfolioApi = {
   getHistory: async (accountId: string = 'default'): Promise<PortfolioHistoryPoint[]> => 
     (await api.get('/portfolio/history', { params: { account_id: accountId } })).data,
   getWaterfall: async (): Promise<CashflowItem[]> => (await api.get('/trades/waterfall')).data,
-  uploadFiles: async (files: File[]) => {
+  uploadFiles: async (files: File[]): Promise<UploadResult> => {
     const formData = new FormData();
     files.forEach((file) => formData.append('files', file));
     return (await api.post('/trades/upload', formData, {
