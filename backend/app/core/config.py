@@ -7,6 +7,12 @@ except ImportError:
     SettingsConfigDict = dict
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.path.join(os.path.dirname(__file__), "..", "..", ".env"),  # backend/.env
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
     PROJECT_NAME: str = "Portfolio Analytics API"
     ENVIRONMENT: str = "development"
     API_V1_STR: str = "/api/v1"
@@ -27,7 +33,9 @@ class Settings(BaseSettings):
     ALPACA_SECRET_KEY: Optional[str] = None
     EODHD_API_TOKEN: Optional[str] = None
     FINAGE_API_KEY: Optional[str] = None
-    TWELVEDATA_API_KEY: Optional[str] = None
+    TWELVEDATA_API_KEY: Optional[str] = None  # comma-separated for key rotation
+    ALPHA_VANTAGE_API_KEY: Optional[str] = None
+    POLYGON_API_KEY: Optional[str] = None
 
     # Trading 212
     T212_API_KEY: Optional[str] = None

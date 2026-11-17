@@ -20,5 +20,6 @@
         }
     },
     "terminal.integrated.defaultProfile.osx": "bash (venv)",
-    "python.analysis.diagnosticsSource": "Pylance + Pyrefly"
+    "python.analysis.diagnosticsSource": "Pylance + Pyrefly",
+    "python.terminal.useEnvFile": true
 }
