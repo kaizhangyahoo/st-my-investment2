@@ -24,6 +24,7 @@ class TradeActivityItem(BaseModel):
     time: str
     activity: str
     market: str
+    ticker: Optional[str] = None
 
 class UnresolvedSymbol(BaseModel):
     market_name: str

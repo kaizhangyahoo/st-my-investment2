@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { portfolioApi } from '../../services/api';
-import { FeedStatus, PortfolioSummary, Position, UploadResult } from '../../types';
+import { FeedStatus, PortfolioSummary, Position, TradeActivityItem, UploadResult } from '../../types';
 
 interface IgAnalyticsViewProps {
   summary: PortfolioSummary | null;
@@ -24,7 +24,21 @@ const SAMPLE_POSITIONS: Position[] = [
   { ticker: 'FIRY', market: 'First Republic Trust Liquid', quantity: 80, current_price: 12.40, market_value_gbp: 768.00, pnl_gbp: -320.00, currency: 'USD' },
 ];
 
-const SAMPLE_TRADE_ACTIVITY = [
+type ActivityPeriod = 'QUARTER' | 'YEAR' | 'ALL';
+type ActivitySide = 'ALL' | 'BUY' | 'SELL';
+
+const SESSION_SUFFIX = /\s*\((?:24 Hours|All Sessions|Extended Hours)\)\s*$/i;
+
+// Backend sends ISO dates; older payloads may still carry IG's DD/MM/YYYY.
+const parseActivityDate = (raw: string): Date | null => {
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(raw);
+  if (iso) return new Date(+iso[1], +iso[2] - 1, +iso[3]);
+  const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(raw);
+  if (dmy) return new Date(+dmy[3], +dmy[2] - 1, +dmy[1]);
+  return null;
+};
+
+const SAMPLE_TRADE_ACTIVITY: TradeActivityItem[] = [
   { qty: 40, fill: '$128.10', value: '£3,959.81', date: '2026-10-24', time: '14:22:04', activity: 'BUY', market: 'NVIDIA Corp (NVDA)' },
   { qty: 15, fill: '$938.50', value: '£10,878.02', date: '2026-10-18', time: '15:10:33', activity: 'BUY', market: 'Lam Research Corp (LRCX)' },
   { qty: 25, fill: '$130.40', value: '£2,519.32', date: '2026-10-12', time: '18:04:12', activity: 'SELL', market: '3M Company (MMM)' },
@@ -44,7 +58,12 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTicker, setSelectedTicker] = useState('MMM');
-  const [activityFilter, setActivityFilter] = useState<'ALL' | 'BUYS' | 'SELLS'>('ALL');
+  const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>('QUARTER');
+  const [activitySide, setActivitySide] = useState<ActivitySide>('ALL');
+  const [instrumentQuery, setInstrumentQuery] = useState('');
+  const [selectedInstrumentKey, setSelectedInstrumentKey] = useState<string | null>(null);
+  const [showInstrumentSuggestions, setShowInstrumentSuggestions] = useState(false);
+  const [highlightedSuggestion, setHighlightedSuggestion] = useState(-1);
 
   // File Upload via Dropzone
   const onDrop = async (acceptedFiles: File[]) => {
@@ -133,11 +152,88 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
     ? summary.trade_activities
     : SAMPLE_TRADE_ACTIVITY;
 
-  const filteredActivity = tradeActivities.filter((item) => {
-    if (activityFilter === 'BUYS') return item.activity === 'BUY';
-    if (activityFilter === 'SELLS') return item.activity === 'SELL';
-    return true;
+  // Positions carry tickers for currently-held instruments; use them when an activity row has none.
+  const tickerByMarket = new Map(positions.map((p) => [p.market, p.ticker]));
+  const activityTicker = (item: TradeActivityItem) => item.ticker || tickerByMarket.get(item.market) || '';
+
+  const now = new Date();
+  const quarterIndex = Math.floor(now.getMonth() / 3);
+  const quarterLabel = `Q${quarterIndex + 1} ${now.getFullYear()}`;
+  const periodStart: Record<ActivityPeriod, Date | null> = {
+    QUARTER: new Date(now.getFullYear(), quarterIndex * 3, 1),
+    YEAR: new Date(now.getFullYear(), 0, 1),
+    ALL: null,
+  };
+  const inPeriod = (item: TradeActivityItem, period: ActivityPeriod) => {
+    const start = periodStart[period];
+    if (!start) return true;
+    const d = parseActivityDate(item.date);
+    return d !== null && d >= start;
+  };
+
+  // IG lists one stock under several session variants, e.g. "Apple Inc (24 Hours)" and
+  // "Apple Inc (All Sessions)". Group them by ticker (or by name without the session suffix)
+  // so searching or picking an instrument returns trades from every variant.
+  const baseNameOf = (market: string) => market.replace(SESSION_SUFFIX, '').trim();
+  const tickerByBaseName = new Map<string, string>();
+  tradeActivities.forEach((a) => {
+    const t = activityTicker(a);
+    if (t && !tickerByBaseName.has(baseNameOf(a.market))) tickerByBaseName.set(baseNameOf(a.market), t);
   });
+  const instrumentKeyOf = (item: TradeActivityItem) => {
+    const base = baseNameOf(item.market);
+    return activityTicker(item) || tickerByBaseName.get(base) || base.toLowerCase();
+  };
+
+  const instrumentGroups = new Map<string, { key: string; label: string; ticker: string; variants: string[] }>();
+  tradeActivities.forEach((a) => {
+    const key = instrumentKeyOf(a);
+    const group = instrumentGroups.get(key);
+    if (!group) {
+      const base = baseNameOf(a.market);
+      instrumentGroups.set(key, {
+        key,
+        label: base,
+        ticker: activityTicker(a) || tickerByBaseName.get(base) || '',
+        variants: [a.market],
+      });
+    } else if (!group.variants.includes(a.market)) {
+      group.variants.push(a.market);
+    }
+  });
+
+  const normalizedQuery = instrumentQuery.trim().toLowerCase();
+  const groupMatchesQuery = (g: { label: string; ticker: string; variants: string[] }) =>
+    !normalizedQuery ||
+    g.ticker.toLowerCase().includes(normalizedQuery) ||
+    g.label.toLowerCase().includes(normalizedQuery) ||
+    g.variants.some((v) => v.toLowerCase().includes(normalizedQuery));
+
+  // Unique instruments across the whole ledger, so suggestions aren't limited by the period filter.
+  const instrumentOptions = Array.from(instrumentGroups.values()).sort((a, b) => a.label.localeCompare(b.label));
+  // After a pick the box holds a display label, not a query, so offer the full list to switch.
+  const instrumentSuggestions = selectedInstrumentKey
+    ? instrumentOptions
+    : instrumentOptions.filter(groupMatchesQuery);
+  const matchingInstrumentKeys = new Set(instrumentSuggestions.map((g) => g.key));
+
+  const matchesInstrument = (item: TradeActivityItem) =>
+    selectedInstrumentKey
+      ? instrumentKeyOf(item) === selectedInstrumentKey
+      : !normalizedQuery || matchingInstrumentKeys.has(instrumentKeyOf(item));
+
+  const selectInstrument = (group: { key: string; label: string; ticker: string } | null) => {
+    setInstrumentQuery(group ? (group.ticker ? `${group.label} (${group.ticker})` : group.label) : '');
+    setSelectedInstrumentKey(group ? group.key : null);
+    setShowInstrumentSuggestions(false);
+    setHighlightedSuggestion(-1);
+  };
+
+  const instrumentActivities = tradeActivities.filter(matchesInstrument);
+  const periodActivities = instrumentActivities.filter((a) => inPeriod(a, activityPeriod));
+  const filteredActivity = periodActivities.filter(
+    (a) => activitySide === 'ALL' || a.activity === activitySide
+  );
 
   const selectedHolding = positions.find((p) => p.ticker === selectedTicker) || positions[0] || null;
 
@@ -850,45 +946,141 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
           <div className="flex items-center gap-space-sm">
             <span className="material-symbols-outlined text-[18px] text-secondary">history</span>
             <span className="font-headline-md text-headline-md text-on-surface font-semibold">
-              Trade Activity Ledger (Recent Quarters)
+              Trade Activities
             </span>
           </div>
 
-          {/* Filter Pills */}
-          <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
-            <button
-              type="button"
-              onClick={() => setActivityFilter('ALL')}
-              className={`px-2.5 py-1 rounded transition-colors ${
-                activityFilter === 'ALL'
-                  ? 'bg-surface-container-high text-primary font-bold'
-                  : 'text-outline hover:text-on-surface'
-              }`}
-            >
-              ALL ({tradeActivities.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setActivityFilter('BUYS')}
-              className={`px-2.5 py-1 rounded transition-colors ${
-                activityFilter === 'BUYS'
-                  ? 'bg-surface-container-high text-primary font-bold'
-                  : 'text-outline hover:text-on-surface'
-              }`}
-            >
-              BUYS ({tradeActivities.filter((a) => a.activity === 'BUY').length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setActivityFilter('SELLS')}
-              className={`px-2.5 py-1 rounded transition-colors ${
-                activityFilter === 'SELLS'
-                  ? 'bg-surface-container-high text-tertiary font-bold'
-                  : 'text-outline hover:text-on-surface'
-              }`}
-            >
-              SELLS ({tradeActivities.filter((a) => a.activity === 'SELL').length})
-            </button>
+          <div className="flex flex-wrap items-center gap-space-sm">
+            {/* Instrument filter with autocomplete */}
+            <div className="relative">
+              <span className="material-symbols-outlined absolute left-2 top-1.5 text-[15px] text-outline">
+                search
+              </span>
+              <input
+                type="text"
+                role="combobox"
+                aria-expanded={showInstrumentSuggestions && instrumentSuggestions.length > 0}
+                aria-autocomplete="list"
+                placeholder="Instrument, symbol or company..."
+                value={instrumentQuery}
+                onChange={(e) => {
+                  setInstrumentQuery(e.target.value);
+                  setSelectedInstrumentKey(null);
+                  setShowInstrumentSuggestions(true);
+                  setHighlightedSuggestion(-1);
+                }}
+                onFocus={() => setShowInstrumentSuggestions(true)}
+                onBlur={() => setShowInstrumentSuggestions(false)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setShowInstrumentSuggestions(true);
+                    setHighlightedSuggestion((i) => Math.min(i + 1, instrumentSuggestions.length - 1));
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setHighlightedSuggestion((i) => Math.max(i - 1, 0));
+                  } else if (e.key === 'Enter' && showInstrumentSuggestions && highlightedSuggestion >= 0) {
+                    e.preventDefault();
+                    selectInstrument(instrumentSuggestions[highlightedSuggestion]);
+                  } else if (e.key === 'Escape') {
+                    setShowInstrumentSuggestions(false);
+                  }
+                }}
+                className="pl-7 pr-7 py-1 rounded bg-surface-container-lowest border border-surface-container text-xs font-mono text-on-surface focus:outline-none focus:border-primary w-60"
+              />
+              {instrumentQuery && (
+                <button
+                  type="button"
+                  onClick={() => selectInstrument(null)}
+                  title="Clear instrument filter"
+                  className="absolute right-1.5 top-1 p-0.5 rounded text-outline hover:text-on-surface"
+                >
+                  <span className="material-symbols-outlined text-[14px]">close</span>
+                </button>
+              )}
+              {showInstrumentSuggestions && instrumentSuggestions.length > 0 && (
+                <ul
+                  role="listbox"
+                  className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded border border-surface-container-high bg-surface-container-lowest shadow-lg text-xs font-mono"
+                >
+                  {instrumentSuggestions.map((o, i) => (
+                    <li
+                      key={o.key}
+                      role="option"
+                      aria-selected={i === highlightedSuggestion}
+                      title={o.variants.join('\n')}
+                      // mousedown fires before the input's blur, so the click isn't lost
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        selectInstrument(o);
+                      }}
+                      onMouseEnter={() => setHighlightedSuggestion(i)}
+                      className={`px-2 py-1.5 cursor-pointer flex items-center justify-between gap-2 ${
+                        i === highlightedSuggestion ? 'bg-surface-container-high' : ''
+                      }`}
+                    >
+                      <span className="text-on-surface truncate">
+                        {o.label}
+                        {o.variants.length > 1 && (
+                          <span className="ml-1 text-[10px] text-outline">×{o.variants.length} sessions</span>
+                        )}
+                      </span>
+                      {o.ticker && <span className="text-primary font-semibold shrink-0">{o.ticker}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {/* Period Pills */}
+            <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
+              {(
+                [
+                  ['QUARTER', quarterLabel],
+                  ['YEAR', 'CURRENT YEAR'],
+                  ['ALL', 'ALL'],
+                ] as [ActivityPeriod, string][]
+              ).map(([period, label]) => (
+                <button
+                  key={period}
+                  type="button"
+                  onClick={() => setActivityPeriod(period)}
+                  className={`px-2.5 py-1 rounded transition-colors ${
+                    activityPeriod === period
+                      ? 'bg-surface-container-high text-primary font-bold'
+                      : 'text-outline hover:text-on-surface'
+                  }`}
+                >
+                  {label} ({instrumentActivities.filter((a) => inPeriod(a, period)).length})
+                </button>
+              ))}
+            </div>
+
+            {/* Side Pills (click again to clear) */}
+            <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
+              <button
+                type="button"
+                onClick={() => setActivitySide((s) => (s === 'BUY' ? 'ALL' : 'BUY'))}
+                className={`px-2.5 py-1 rounded transition-colors ${
+                  activitySide === 'BUY'
+                    ? 'bg-surface-container-high text-primary font-bold'
+                    : 'text-outline hover:text-on-surface'
+                }`}
+              >
+                BUY ({periodActivities.filter((a) => a.activity === 'BUY').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActivitySide((s) => (s === 'SELL' ? 'ALL' : 'SELL'))}
+                className={`px-2.5 py-1 rounded transition-colors ${
+                  activitySide === 'SELL'
+                    ? 'bg-surface-container-high text-tertiary font-bold'
+                    : 'text-outline hover:text-on-surface'
+                }`}
+              >
+                SELL ({periodActivities.filter((a) => a.activity === 'SELL').length})
+              </button>
+            </div>
           </div>
         </div>
 
@@ -912,6 +1104,8 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                   <td colSpan={7} className="text-center py-8 text-on-surface-variant font-mono text-xs">
                     {isMissingTradeHistory
                       ? 'No trade activity available (Missing Trade History statement).'
+                      : activityPeriod !== 'ALL' && instrumentActivities.length > 0
+                      ? `No matching trades in ${activityPeriod === 'QUARTER' ? quarterLabel : 'the current year'} — try a wider period.`
                       : 'No activity matches the current filter.'}
                   </td>
                 </tr>
@@ -931,6 +1125,9 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                     </td>
                     <td className="py-2 px-space-sm text-on-surface font-medium">
                       {act.market}
+                      {activityTicker(act) && (
+                        <span className="ml-1.5 text-[10px] text-primary">{activityTicker(act)}</span>
+                      )}
                     </td>
                     <td className="py-2 px-space-sm text-right text-on-surface">
                       {act.qty}

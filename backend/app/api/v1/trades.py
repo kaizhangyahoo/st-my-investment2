@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 
 from backend.app.services.portfolio_engine import calculate_positions_from_df, calculate_cashflow_waterfall, empty_data_quality
-from backend.app.services.ticker_service import find_unresolved_symbols
+from backend.app.services.ticker_service import find_unresolved_symbols, load_ticker_mappings, resolve_ticker
 from backend.app.schemas.portfolio import PortfolioSummary, CashflowItem, TradeActivityItem
 from backend.app.core.security import get_current_user
 
@@ -78,29 +78,38 @@ def find_latest_download_files() -> Tuple[Optional[str], Optional[str]]:
 
     return latest_trade, latest_trans
 
-def extract_trade_activities(df: pd.DataFrame, limit: int = 50) -> List[Dict[str, Any]]:
-    """Extract formatted recent trade activity records from TradeHistory DataFrame."""
+def extract_trade_activities(df: pd.DataFrame, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Extract formatted trade activity records (newest first) from TradeHistory DataFrame.
+
+    Dates are emitted as ISO `YYYY-MM-DD` so the client can filter by quarter/year.
+    """
     try:
         df_copy = df.copy()
         if 'TextDate' in df_copy.columns:
             df_copy['ParsedDate'] = pd.to_datetime(df_copy['TextDate'], errors='coerce', dayfirst=True)
             df_copy = df_copy.sort_values(by='ParsedDate', ascending=False)
+        if limit is not None:
+            df_copy = df_copy.head(limit)
 
+        ticker_map = load_ticker_mappings()
         activities: List[Dict[str, Any]] = []
-        for _, row in df_copy.head(limit).iterrows():
+        for _, row in df_copy.iterrows():
             direction = str(row.get('Direction', '')).upper()
             qty = float(row.get('Quantity', 0)) if pd.notnull(row.get('Quantity')) else 0.0
             act = 'BUY' if direction == 'BUY' or qty > 0 else 'SELL'
             price = row.get('Price', 0.0)
             cost = row.get('Cost/Proceeds', 0.0)
+            parsed = row.get('ParsedDate')
+            market = str(row.get('Market', ''))
             activities.append({
                 'qty': abs(qty),
                 'fill': f"{price}",
                 'value': f"£{abs(cost):,.2f}" if pd.notnull(cost) else "",
-                'date': str(row.get('TextDate', '')),
+                'date': parsed.strftime('%Y-%m-%d') if pd.notnull(parsed) else str(row.get('TextDate', '')),
                 'time': str(row.get('Time', '')),
                 'activity': act,
-                'market': str(row.get('Market', ''))
+                'market': market,
+                'ticker': resolve_ticker(market, ticker_map),
             })
         return activities
     except Exception:

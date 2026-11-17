@@ -30,6 +30,7 @@ export interface TradeActivityItem {
   time: string;
   activity: string;
   market: string;
+  ticker?: string | null;
 }
 
 export interface UnresolvedSymbol {
