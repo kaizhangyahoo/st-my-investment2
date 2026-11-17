@@ -3,6 +3,8 @@ import { PortfolioSummary, PortfolioHistoryPoint, CashflowItem, UserProfile, Upl
 
 const api = axios.create({
   baseURL: '/api/v1',
+  // Without this a hung backend leaves the dashboard showing sample data forever.
+  timeout: 60000,
   headers: {
     'Content-Type': 'application/json',
   },

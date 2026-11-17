@@ -37,6 +37,20 @@ export interface UnresolvedSymbol {
   row_count: number;
 }
 
+export interface ProviderFailure {
+  ticker: string;
+  provider: string;
+  reason: string;
+}
+
+/** A ticker can appear in `failures` and still be priced — that means a fallback worked. */
+export interface DataQuality {
+  degraded: boolean;
+  fx_fallback: boolean;
+  unpriced_tickers: string[];
+  failures: ProviderFailure[];
+}
+
 export interface PortfolioSummary {
   total_market_value_gbp: number;
   total_invested_cash: number;
@@ -49,6 +63,14 @@ export interface PortfolioSummary {
   missing_trade_history?: boolean;
   unresolved_symbols?: UnresolvedSymbol[];
   excluded_row_count?: number;
+  data_quality?: DataQuality | null;
+}
+
+export type FeedState = 'loading' | 'live' | 'partial' | 'degraded' | 'offline';
+
+export interface FeedStatus {
+  state: FeedState;
+  detail: string[];
 }
 
 export interface UploadResult {

@@ -7,20 +7,60 @@ import { TickerMappingView } from '../tickers/TickerMappingView';
 import { PerformanceBlotterView } from './PerformanceBlotterView';
 import { UnresolvedSymbolsModal } from '../tickers/UnresolvedSymbolsModal';
 import { portfolioApi } from '../../services/api';
-import { PortfolioSummary, UnresolvedSymbol, UploadResult } from '../../types';
+import { PortfolioSummary, UnresolvedSymbol, UploadResult, FeedStatus } from '../../types';
+
+const deriveFeedStatus = (data: PortfolioSummary): FeedStatus => {
+  const dq = data.data_quality;
+  if (!dq) return { state: 'live', detail: [`${data.positions.length} positions priced`] };
+
+  const detail: string[] = [];
+  if (dq.fx_fallback) {
+    detail.push('FX rates unavailable — non-GBP valuations are estimates, not real quotes');
+  }
+  if (dq.unpriced_tickers.length) {
+    detail.push(
+      `No price from any provider: ${dq.unpriced_tickers.join(', ')} — totals are understated`,
+    );
+  }
+  // Group the per-attempt failures by provider so the tooltip names the source, not every ticker.
+  const byProvider = new Map<string, string[]>();
+  dq.failures.forEach((f) => {
+    const key = `${f.provider}: ${f.reason}`;
+    byProvider.set(key, [...(byProvider.get(key) ?? []), f.ticker]);
+  });
+  byProvider.forEach((tickers, key) => detail.push(`${key} (${tickers.join(', ')})`));
+
+  if (dq.degraded) return { state: 'degraded', detail };
+  if (detail.length) return { state: 'partial', detail };
+  return { state: 'live', detail: [`${data.positions.length} positions priced`] };
+};
 
 export const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('ig-csv-analysis');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [gateSymbols, setGateSymbols] = useState<UnresolvedSymbol[]>([]);
+  const [feed, setFeed] = useState<FeedStatus>({ state: 'loading', detail: [] });
 
   const loadData = async () => {
+    setFeed({ state: 'loading', detail: [] });
     try {
       const data = await portfolioApi.getSummary();
       setSummary(data);
-    } catch (err) {
-      console.warn('Backend not serving live summary; falling back to terminal baseline', err);
+      setFeed(deriveFeedStatus(data));
+    } catch (err: any) {
+      // Must not be swallowed: a silent failure is indistinguishable from loading, which is
+      // what let sample data sit on screen looking real.
+      console.error('Failed to load live portfolio summary', err);
+      setFeed({
+        state: 'offline',
+        detail: [
+          `GET /api/v1/trades/summary failed: ${err?.message ?? 'unknown error'}`,
+          err?.code === 'ECONNABORTED'
+            ? 'Request timed out after 60s — is the backend running?'
+            : 'Figures shown are sample data, not your portfolio.',
+        ],
+      });
     }
   };
 
@@ -67,6 +107,7 @@ export const Dashboard: React.FC = () => {
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
         unresolvedCount={summary?.unresolved_symbols?.length ?? 0}
+        feed={feed}
       />
 
       {/* Top Fixed Header */}
@@ -88,6 +129,7 @@ export const Dashboard: React.FC = () => {
           {activeTab === 'ig-csv-analysis' && (
             <IgAnalyticsView
               summary={summary}
+              feed={feed}
               onReset={handleResetPanels}
               onUploadComplete={handleUploadComplete}
             />

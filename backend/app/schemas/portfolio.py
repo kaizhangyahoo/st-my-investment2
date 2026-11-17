@@ -29,6 +29,19 @@ class UnresolvedSymbol(BaseModel):
     market_name: str
     row_count: int
 
+class ProviderFailure(BaseModel):
+    ticker: str
+    provider: str
+    reason: str
+
+class DataQuality(BaseModel):
+    """Why the figures may be wrong. `failures` records every provider attempt that yielded no
+    price, so a ticker can appear there and still be priced — that means a fallback worked."""
+    degraded: bool = False
+    fx_fallback: bool = False
+    unpriced_tickers: List[str] = []
+    failures: List[ProviderFailure] = []
+
 class PortfolioSummary(BaseModel):
     total_market_value_gbp: float
     total_invested_cash: float
@@ -41,6 +54,7 @@ class PortfolioSummary(BaseModel):
     missing_trade_history: bool = False
     unresolved_symbols: List[UnresolvedSymbol] = []
     excluded_row_count: int = 0
+    data_quality: Optional[DataQuality] = None
 
 class PortfolioHistoryPoint(BaseModel):
     date: str

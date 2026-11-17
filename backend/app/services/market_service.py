@@ -1,29 +1,44 @@
 import pandas as pd
 import requests
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from backend.app.core.cache import ttl_cache
 from backend.app.services.price_service import get_prices, fetch_yahoo_history
 
 _FETCH_ERRORS = (requests.RequestException, ValueError, KeyError, IndexError, TypeError)
 
+# Last-resort rates used only when Yahoo FX is unreachable. They are approximations, so every
+# caller gets fx_fallback=True alongside them and must surface that to the user.
+_FALLBACK_GBPUSD = 1.25
+_FALLBACK_GBPEUR = 1.15
+
 
 @ttl_cache(ttl=3600)
-def get_current_prices(tickers: List[str]) -> Dict[str, Optional[float]]:
+def get_current_prices(tickers: List[str]) -> Tuple[Dict[str, Optional[float]], List[Dict[str, str]]]:
+    """Price map plus per-provider failure records. Cached as a pair so a cache hit keeps both."""
     return get_prices(tickers)
 
 @ttl_cache(ttl=3600)
-def get_historical_fx(start_date: str) -> Dict[str, pd.Series]:
+def get_historical_fx(start_date: str) -> Tuple[Dict[str, pd.Series], bool]:
+    """Historical GBP crosses, plus a flag saying whether the rates are real or approximated."""
     fx_data = {}
     try:
         for pair in ['GBPUSD=X', 'GBPEUR=X']:
-            fx_data[pair] = fetch_yahoo_history(pair, start_date)['close']
+            series = fetch_yahoo_history(pair, start_date)['close']
+            if series.empty:
+                raise ValueError(f"{pair} returned no usable closes")
+            fx_data[pair] = series
     except _FETCH_ERRORS as e:
-        print(f"Error fetching FX data: {e}")
+        print(
+            f"Error fetching FX data: {e}. Falling back to approximate rates "
+            f"(GBPUSD={_FALLBACK_GBPUSD}, GBPEUR={_FALLBACK_GBPEUR}); "
+            "every non-GBP valuation is now an estimate, not a real quote."
+        )
         dates = pd.date_range(start=start_date, end=datetime.now())
-        fx_data['GBPUSD=X'] = pd.Series(1.25, index=dates)
-        fx_data['GBPEUR=X'] = pd.Series(1.15, index=dates)
-    return fx_data
+        fx_data['GBPUSD=X'] = pd.Series(_FALLBACK_GBPUSD, index=dates)
+        fx_data['GBPEUR=X'] = pd.Series(_FALLBACK_GBPEUR, index=dates)
+        return fx_data, True
+    return fx_data, False
 
 def get_ohlc(ticker: str, start_date: str) -> pd.DataFrame:
     try:

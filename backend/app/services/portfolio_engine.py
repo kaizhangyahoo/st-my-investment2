@@ -8,6 +8,10 @@ from backend.app.services.market_service import get_current_prices, get_historic
 from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker, find_unresolved_symbols
 from backend.app.core.config import settings
 
+def empty_data_quality() -> Dict[str, Any]:
+    """The all-clear shape, for responses where no price fetch was attempted."""
+    return {"degraded": False, "fx_fallback": False, "unpriced_tickers": [], "failures": []}
+
 def convert_to_gbp(row: pd.Series, gbpusd_rate: float, gbpeur_rate: float) -> float:
     ticker = str(row.name) if hasattr(row, 'name') else str(row.get('Ticker', ''))
     val = float(row.get('Market Value', 0))
@@ -39,6 +43,7 @@ def calculate_positions_from_df(df_trade_history: pd.DataFrame) -> Dict[str, Any
             "positions": [],
             "unresolved_symbols": unresolved_symbols,
             "excluded_row_count": excluded_row_count,
+            "data_quality": empty_data_quality(),
         }
 
     grouped = df_valid.groupby('Ticker').agg({
@@ -52,18 +57,25 @@ def calculate_positions_from_df(df_trade_history: pd.DataFrame) -> Dict[str, Any
     grouped = grouped[grouped['Quantity'] != 0].copy()
 
     grouped['Costs'] = grouped['Cost/Proceeds'] + grouped['Charges'] + grouped['Commission']
-    current_prices = get_current_prices(grouped.index.tolist())
+    current_prices, price_failures = get_current_prices(grouped.index.tolist())
     grouped['Current Price'] = grouped.index.map(current_prices)
     grouped['Quantity'] = pd.to_numeric(grouped['Quantity'], errors='coerce')
     grouped['Current Price'] = pd.to_numeric(grouped['Current Price'], errors='coerce').fillna(0)
     grouped['Market Value'] = grouped['Quantity'] * grouped['Current Price']
 
+    unpriced = sorted(str(t) for t in grouped.index[grouped['Current Price'] == 0])
+    if unpriced:
+        print(
+            f"No price from any provider for {len(unpriced)} ticker(s): {', '.join(unpriced)}. "
+            "Market value, P&L and totals are understated."
+        )
+
     # FX conversion
     min_date = df_valid['Date'].min() if 'Date' in df_valid.columns else datetime.now() - timedelta(days=365)
     start_str = min_date.strftime('%Y-%m-%d') if pd.notnull(min_date) else '2023-01-01'
-    fx_dict = get_historical_fx(start_str)
-    gbpusd_rate = float(fx_dict['GBPUSD=X'].iloc[-1]) if 'GBPUSD=X' in fx_dict and not fx_dict['GBPUSD=X'].empty else 1.25
-    gbpeur_rate = float(fx_dict['GBPEUR=X'].iloc[-1]) if 'GBPEUR=X' in fx_dict and not fx_dict['GBPEUR=X'].empty else 1.15
+    fx_dict, fx_fallback = get_historical_fx(start_str)
+    gbpusd_rate = float(fx_dict['GBPUSD=X'].iloc[-1])
+    gbpeur_rate = float(fx_dict['GBPEUR=X'].iloc[-1])
 
     grouped['Market Value GBP'] = grouped.apply(lambda r: convert_to_gbp(r, gbpusd_rate, gbpeur_rate), axis=1)
     grouped['PandL GBP'] = grouped['Market Value GBP'] + grouped['Costs']
@@ -99,6 +111,12 @@ def calculate_positions_from_df(df_trade_history: pd.DataFrame) -> Dict[str, Any
         "positions": positions_list,
         "unresolved_symbols": unresolved_symbols,
         "excluded_row_count": excluded_row_count,
+        "data_quality": {
+            "degraded": bool(unpriced) or fx_fallback,
+            "fx_fallback": fx_fallback,
+            "unpriced_tickers": unpriced,
+            "failures": price_failures,
+        },
     }
 
 def calculate_cashflow_waterfall(df_transactions: pd.DataFrame) -> List[Dict[str, Any]]:

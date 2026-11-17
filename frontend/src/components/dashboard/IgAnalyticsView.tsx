@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { portfolioApi } from '../../services/api';
-import { PortfolioSummary, Position, UploadResult } from '../../types';
+import { FeedStatus, PortfolioSummary, Position, UploadResult } from '../../types';
 
 interface IgAnalyticsViewProps {
   summary: PortfolioSummary | null;
   onReset: () => void;
   onUploadComplete: (res: UploadResult) => void;
+  feed?: FeedStatus;
 }
 
 // Default institutional fallback dataset matching Stitch design
@@ -36,6 +37,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   summary,
   onReset,
   onUploadComplete,
+  feed = { state: 'live', detail: [] },
 }) => {
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -139,6 +141,9 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
 
   const selectedHolding = positions.find((p) => p.ticker === selectedTicker) || positions[0] || null;
 
+  // Every figure on this page is a placeholder when this is true, so the status bar has to say so.
+  const isShowingSamples = !isMissingTradeHistory && !hasLivePositions;
+
   return (
     <div className="space-y-space-lg pb-16">
       {/* ─────────────────────────────────────────────────────────────
@@ -210,33 +215,61 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
           </div>
 
           {/* Active File Status Bar */}
-          <div className="flex items-center justify-between pt-3 mt-3 border-t border-surface-container/40 text-on-surface-variant">
-            <div className="flex items-center gap-1.5 truncate max-w-[240px]">
-              <span className="material-symbols-outlined text-[15px] text-secondary">description</span>
-              <span className="font-data-mono-sm text-data-mono-sm text-secondary truncate" title={displayedFileName}>
-                {displayedFileName}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              {isMissingTradeHistory ? (
-                <span className="font-label-caps text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30">
-                  MISSING TRADE HISTORY
+          <div className="pt-3 mt-3 border-t border-surface-container/40 text-on-surface-variant">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 truncate max-w-[240px]">
+                <span
+                  className={`material-symbols-outlined text-[15px] ${
+                    feed.state === 'loading' ? 'text-amber-400 animate-spin' : 'text-secondary'
+                  }`}
+                >
+                  {feed.state === 'loading' ? 'sync' : 'description'}
                 </span>
-              ) : (
-                <span className="font-label-caps text-label-caps text-outline">PARSER: IG</span>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setUploadedFiles([]);
-                  onReset();
-                }}
-                title="Reset panels"
-                className="p-1 rounded hover:bg-surface-container text-outline hover:text-tertiary transition-colors"
-              >
-                <span className="material-symbols-outlined text-[14px]">close</span>
-              </button>
+                <span className="font-data-mono-sm text-data-mono-sm text-secondary truncate" title={displayedFileName}>
+                  {displayedFileName}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {feed.state === 'loading' ? (
+                  <span className="font-label-caps text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30 animate-pulse">
+                    LOADING…
+                  </span>
+                ) : feed.state === 'offline' ? (
+                  <span className="font-label-caps text-[9px] px-1.5 py-0.5 rounded bg-error-container/30 text-error font-semibold border border-error/40">
+                    FEED_ERROR
+                  </span>
+                ) : isMissingTradeHistory ? (
+                  <span className="font-label-caps text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30">
+                    MISSING TRADE HISTORY
+                  </span>
+                ) : (
+                  <span className="font-label-caps text-label-caps text-outline">PARSER: IG</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUploadedFiles([]);
+                    onReset();
+                  }}
+                  title="Reset panels"
+                  className="p-1 rounded hover:bg-surface-container text-outline hover:text-tertiary transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[14px]">close</span>
+                </button>
+              </div>
             </div>
+
+            {feed.state === 'loading' && isShowingSamples && (
+              <span className="block mt-1.5 font-body-sm text-[10px] leading-tight text-amber-400">
+                Showing sample data while prices load — these are not your figures yet.
+              </span>
+            )}
+            {feed.state === 'offline' && (
+              <span className="block mt-1.5 font-data-mono-sm text-[10px] leading-tight text-error">
+                {feed.detail[0] ?? 'Cannot reach the backend.'}
+                {isShowingSamples && ' Figures shown are sample data.'}
+              </span>
+            )}
           </div>
         </div>
 
