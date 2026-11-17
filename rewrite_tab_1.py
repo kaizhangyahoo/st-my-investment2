@@ -488,6 +488,14 @@ if uploaded_file is not None:
             GBPEUR = get_historical_fx(df_trade_history_ticker_updated['Date'].min().strftime('%Y-%m-%d'))['GBPEUR=X']
             df_current_positions['Market Value GBP'] = df_current_positions.apply(convert_to_gbp, axis=1)
 
+            # sum() skips NaN, so an unpriced holding would quietly shrink the total.
+            unpriced_positions = df_current_positions[df_current_positions['Market Value GBP'].isna()]
+            if not unpriced_positions.empty:
+                st.warning(
+                    f"⚠️ No current price for {', '.join(unpriced_positions.index.astype(str))}. "
+                    "These holdings are excluded from the total market value, which is therefore understated."
+                )
+
             Total_market_value_gbp = df_current_positions['Market Value GBP'].sum()
             USD_market_value_in_gbp = df_current_positions[df_current_positions['Currency']=='USD']['Market Value GBP'].sum()
             EUR_market_value_in_gbp = df_current_positions[df_current_positions['Currency']=='EUR']['Market Value GBP'].sum()

@@ -59,15 +59,27 @@ def getEODpriceUSA(L) -> dict:
         if i>1:
             print(i, "sleeping for 60 seconds")
             sleep(60)
+
+    # TwelveData's free tier runs out of daily credits (HTTP 429); price the rest from Yahoo.
+    missing = [s for s in set(L) if s not in usa_close_price]
+    if missing:
+        print(f"TwelveData returned no price for {missing}, falling back to Yahoo Finance.")
+        usa_close_price.update(_yahoo_last_closes(missing, 1))  # US quotes are in dollars
     return usa_close_price
 
-def getEODpriceUK(L) -> dict:
+def _yahoo_last_closes(L, divisor: float) -> dict:
+    """Last Yahoo close per symbol, divided by `divisor` to reach the symbol's major unit.
+
+    LSE symbols are quoted in pence, so they need a divisor of 100; XETRA and US symbols are
+    already quoted in euros/dollars and need 1. A symbol Yahoo has no usable data for is left
+    out of the result rather than given a stale or wrongly scaled price.
+    """
     if datetime.now().hour < 22.5:
         last_business_day = np.busday_offset('today', -1, roll='backward')
     else:
         last_business_day = np.busday_offset('today', 0, roll='backward')
     
-    uk_close_price = {}
+    closes = {}
     for i in L:
         # close_price = web.DataReader(i, 'yahoo', last_business_day)['Adj Close'][-1]
         print(str(last_business_day))
@@ -76,14 +88,27 @@ def getEODpriceUK(L) -> dict:
             close_price_object = OHLC_YahooFinance(i, str(last_business_day))
             close_price = close_price_object.yahooDataV8()
         except KeyError as e:
-            if 'timestamp' in str(e):
-                last_business_day = np.busday_offset(last_business_day, -1, roll='backward')
+            if 'timestamp' not in str(e):
+                print(f"Yahoo returned no usable data for {i}: {e}. Skipping it — portfolio totals will be understated.")
+                continue
+            last_business_day = np.busday_offset(last_business_day, -1, roll='backward')
+            try:
                 close_price_object = OHLC_YahooFinance(i, str(last_business_day))
                 close_price = close_price_object.yahooDataV8()
+            except Exception as retry_error:
+                print(f"Yahoo retry at {last_business_day} failed for {i}: {retry_error}. Skipping it — portfolio totals will be understated.")
+                continue
+        except Exception as e:
+            print(f"Yahoo price fetch failed for {i}: {e}. Skipping it — portfolio totals will be understated.")
+            continue
 
-        uk_close_price[i] = close_price['close'].iloc[-1]/100
+        closes[i] = close_price['close'].iloc[-1]/divisor
 
-    return uk_close_price
+    return closes
+
+
+def getEODpriceUK(L) -> dict:
+    return _yahoo_last_closes(L, 100)  # LSE quotes are in pence
 
 
 
@@ -168,6 +193,14 @@ def getEODpriceFromEODHD(symbol_or_symbols, api_token: str = None):
                         return float(prev_close)
             elif response.status_code == 402:
                 print(f"EODHD daily request limit exceeded (402) for {ticker}: {response.text.strip()}")
+                # Each suffix needs its own unit: pence for LSE, euros for XETRA.
+                yahoo_symbol = symbol.strip()
+                if yahoo_symbol.endswith('.L'):
+                    print(f"Falling back to Yahoo Finance for {yahoo_symbol}.")
+                    return getEODpriceUK([yahoo_symbol]).get(yahoo_symbol)
+                if yahoo_symbol.endswith('.DE'):
+                    print(f"Falling back to Yahoo Finance for {yahoo_symbol}.")
+                    return _yahoo_last_closes([yahoo_symbol], 1).get(yahoo_symbol)
                 return None
             else:
                 print(f"EODHD status {response.status_code} for {ticker}: {response.text.strip()}")
