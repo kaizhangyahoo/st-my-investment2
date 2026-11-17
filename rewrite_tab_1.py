@@ -8,8 +8,7 @@ from datetime import datetime, timedelta
 from rewrite_ticker_resolution import use_sec_site
 from getEODprice import getEODpriceUSA, getEODpriceISIN, getEODpriceFromEODHD
 import rewrite_plot_portfolio_weights as ppw # TODO: rename to make it more intuitive
-from market_data_api import OHLC_YahooFinance
-from historical_market_data import HistoricalMarketData
+from market_data_api import OHLC_YahooFinance, HistoricalMarketData
 from trading212_api import Trading212API
 from urllib.parse import urlparse, parse_qs
 
@@ -158,7 +157,8 @@ def historical_market_data_yahoo(market_data_collections: pd.DataFrame, df_trade
     
     TODO: maintain a csv with historical market data and fx data, and update it when the app is run
     """
-    return HistoricalMarketData(market_data_collections, df_trade_history).fetch_all()
+    return HistoricalMarketData(market_data_collections, df_trade_history,
+                                eodhd_price_fn=getEODpriceFromEODHD).fetch_all()
 
 
 def calculate_portfolio_value_on_date(
@@ -180,11 +180,6 @@ def calculate_portfolio_value_on_date(
     Returns:
         Total portfolio value in GBP as float, or None if incomplete data
     """
-    # Drop any time-of-day: the period buttons pass datetime.today() - timedelta(...), and
-    # asof() below refuses a timestamp it cannot convert losslessly to the FX index unit
-    # (datetime64[s], from Yahoo's date-only daily index).
-    target_date = pd.Timestamp(target_date).normalize()
-
     # Calculate positions on the target date
     df_trades_until_date = df_trade_history[df_trade_history['Date'] <= target_date]
     df_positions = df_trades_until_date.groupby('Ticker').agg({'Quantity': 'sum', 'Currency': 'last'})
@@ -492,14 +487,6 @@ if uploaded_file is not None:
             GBPUSD = get_historical_fx(df_trade_history_ticker_updated['Date'].min().strftime('%Y-%m-%d'))['GBPUSD=X']
             GBPEUR = get_historical_fx(df_trade_history_ticker_updated['Date'].min().strftime('%Y-%m-%d'))['GBPEUR=X']
             df_current_positions['Market Value GBP'] = df_current_positions.apply(convert_to_gbp, axis=1)
-
-            # sum() skips NaN, so an unpriced holding would quietly shrink the total.
-            unpriced_positions = df_current_positions[df_current_positions['Market Value GBP'].isna()]
-            if not unpriced_positions.empty:
-                st.warning(
-                    f"⚠️ No current price for {', '.join(unpriced_positions.index.astype(str))}. "
-                    "These holdings are excluded from the total market value, which is therefore understated."
-                )
 
             Total_market_value_gbp = df_current_positions['Market Value GBP'].sum()
             USD_market_value_in_gbp = df_current_positions[df_current_positions['Currency']=='USD']['Market Value GBP'].sum()
