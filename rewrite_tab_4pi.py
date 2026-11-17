@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 from rewrite_ticker_resolution import use_sec_site
 from getEODprice import getEODpriceUSA, getEODpriceFromEODHD
 import rewrite_plot_portfolio_weights as ppw # TODO: rename to make it more intuitive
-from market_data_api import OHLC_YahooFinance, HistoricalMarketData
+from market_data_api import OHLC_YahooFinance
+from historical_market_data import HistoricalMarketData
 import glob, socket, platform
 
 from trading212.t212dec import lss

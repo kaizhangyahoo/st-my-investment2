@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 # Add parent directory to path so we can import shared modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from getEODprice import getEODpriceUK, getEODpriceUSA
-from market_data_api import OHLC_YahooFinance, HistoricalMarketData
+from market_data_api import OHLC_YahooFinance
+from historical_market_data import HistoricalMarketData
 
 
 # ─── Ticker Mapping ───────────────────────────────────────────────────
