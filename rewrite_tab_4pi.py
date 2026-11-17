@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 from rewrite_ticker_resolution import use_sec_site
 from getEODprice import getEODpriceUSA, getEODpriceFromEODHD
 import rewrite_plot_portfolio_weights as ppw # TODO: rename to make it more intuitive
-from market_data_api import OHLC_YahooFinance, HistoricalMarketData
+from market_data_api import OHLC_YahooFinance
+from historical_market_data import HistoricalMarketData
 import glob, socket, platform
 
 from trading212.t212dec import lss
@@ -214,8 +215,7 @@ def historical_market_data_yahoo(market_data_collections: pd.DataFrame, df_trade
     
     TODO: maintain a csv with historical market data and fx data, and update it when the app is run
     """
-    return HistoricalMarketData(market_data_collections, df_trade_history,
-                                eodhd_price_fn=getEODpriceFromEODHD).fetch_all()
+    return HistoricalMarketData(market_data_collections, df_trade_history).fetch_all()
 
 
 def calculate_portfolio_value_on_date(
