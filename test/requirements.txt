@@ -1,0 +1,27 @@
+# Dependencies for the test suites. Install from the repo root:
+#
+#     pip install -r test/requirements.txt
+#
+# The suites import the application under test, so the app's own runtime deps are
+# pulled in by reference rather than duplicated here -- one source of truth.
+-r ../backend/requirements.txt
+
+# test/functionalTest/test_unresolved_symbol_gate.py imports UploadFile directly to
+# drive the real upload handler. FastAPI already depends on starlette, but a direct
+# import deserves a direct declaration. 0.24 is where UploadFile became
+# UploadFile(file, *, filename=..., size=..., headers=...) -- keyword-only.
+starlette>=0.24
+
+# Browser end-to-end tests under .agent/skills/playwright_testing/examples/.
+# Nothing under test/ needs these; the test/ suites are stdlib unittest and run
+# offline with no third-party runner.
+#
+# After installing, fetch the browser binaries separately -- pip does not:
+#
+#     playwright install chromium
+#
+# pytest-playwright is deliberately NOT listed: the examples open their own
+# sync_playwright() context in a local `browser_context` fixture and never use the
+# plugin's `page` fixture.
+pytest>=7.4
+playwright>=1.49

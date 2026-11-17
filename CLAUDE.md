@@ -15,12 +15,22 @@ The app runs on `http://localhost:8501`. Secrets must exist at `.streamlit/secre
 streamlit run FNZ-perf-streamlit-report.py
 ```
 
-**Run unit tests:**
+**Run tests** (all offline; must be run from the repo root — `backend` is a PEP 420
+namespace package, so the root has to be on `sys.path`):
 ```bash
-python -m unittest verify_client
+python -m unittest                                          # everything
+python -m unittest discover -s test/unitTest                # one bucket
+python -m test.functionalTest.test_unresolved_symbol_gate   # one module
 ```
+`test/` is split into `unitTest/` (one function or class in isolation),
+`functionalTest/` (a feature through its real entry point), `nonFunctionalTest/`
+(performance and resilience) and `support/` (shared stubs and fixtures). Note
+`python test/unitTest/foo.py` does *not* work — use `-m`, which puts the root on the path.
+See **`test/README.md`** for which bucket a new test belongs in and the isolation rules
+that keep the suite offline; deps are in `test/requirements.txt`.
 
-**Run Playwright E2E tests** (requires app running locally first):
+**Run Playwright E2E tests** (requires app running locally first). These live with the
+skill that owns them and target the legacy Streamlit app on :8501, not the backend:
 ```bash
 pytest .agent/skills/playwright_testing/examples
 ```
