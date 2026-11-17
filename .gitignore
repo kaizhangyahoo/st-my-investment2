@@ -10,3 +10,4 @@ ig/ig_positions.py
 .env
 .DS_Store
 trading212/*.csv
+frontend/node_modules/*
