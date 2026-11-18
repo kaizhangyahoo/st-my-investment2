@@ -1,27 +1,41 @@
 from fastapi import APIRouter, Depends, Query
 from typing import List, Dict, Any, Optional
-from backend.app.schemas.portfolio import PortfolioSummary, PortfolioHistoryPoint, CashflowItem
+from datetime import datetime, timezone
+from backend.app.schemas.portfolio import PortfolioSummary, PortfolioHistoryResponse, CashflowItem
 from backend.app.core.security import get_current_user
-import json
-import os
-from backend.app.core.config import settings
+from backend.app.services import history_service
+from backend.app.api.v1.trades import get_or_load_trade_df
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
-@router.get("/history", response_model=List[PortfolioHistoryPoint])
-def get_history(account_id: str = "default", user: dict = Depends(get_current_user)):
-    filepath = settings.PORTFOLIO_VALUES_FILE
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, "r") as f:
-                data = json.load(f)
-                account_data = data.get(account_id, {})
-                points = [{"date": k, "value": float(v)} for k, v in account_data.items() if v is not None]
-                points.sort(key=lambda x: x["date"])
-                return points
-        except Exception:
-            pass
-    return []
+@router.get("/history", response_model=PortfolioHistoryResponse)
+def get_history(
+    account_id: Optional[str] = None,
+    refresh: bool = False,
+    user: dict = Depends(get_current_user),
+):
+    """Historical GBP value of the caller's portfolio.
+
+    `account_id` reads a stored series verbatim instead of computing one, which is how the
+    Trading 212 keys the legacy Streamlit app writes ("QX2B3") stay reachable.
+    """
+    if account_id:
+        return {
+            "points": history_service.read_cached_series(account_id),
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+            "data_quality": {"degraded": False},
+        }
+
+    user_id = user.get("sub", "default")
+    key = history_service.portfolio_key(user_id)
+    df, _ = get_or_load_trade_df(user_id)
+    if df is None:
+        return {
+            "points": [],
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+            "data_quality": {"degraded": False},
+        }
+    return history_service.compute_history(df, key, force_recompute=refresh)
 
 @router.get("/benchmark")
 def get_benchmark(symbol: str = "^SPX", user: dict = Depends(get_current_user)):

@@ -61,6 +61,24 @@ class PortfolioHistoryPoint(BaseModel):
     date: str
     value: float
 
+class UnconvertibleHolding(BaseModel):
+    ticker: str
+    currency: str
+
+class HistoryDataQuality(BaseModel):
+    """Why the series may be incomplete. `skipped_dates` counts trading days dropped because an
+    open position had no close that day -- the series is sparse there, not flat."""
+    degraded: bool = False
+    fx_fallback: bool = False
+    skipped_dates: int = 0
+    unpriced_tickers: List[str] = []
+    unconvertible: List[UnconvertibleHolding] = []
+
+class PortfolioHistoryResponse(BaseModel):
+    points: List[PortfolioHistoryPoint]
+    computed_at: str
+    data_quality: HistoryDataQuality
+
 class BenchmarkPoint(BaseModel):
     date: str
     value: float

@@ -47,3 +47,19 @@ def get_ohlc(ticker: str, start_date: str) -> pd.DataFrame:
         print(f"Error fetching OHLC for {ticker}: {e}")
         return pd.DataFrame(columns=['Date', 'close'])
 
+@ttl_cache(ttl=3600)
+def get_price_history(ticker: str, start_date: str) -> Tuple[pd.DataFrame, Optional[str]]:
+    """Daily closes for one ticker plus the currency they are quoted in.
+
+    The currency is returned alongside rather than folded into the frame because the caller has
+    to convert across several crosses and "GBp" needs a different rule from a real FX pair.
+    An unreachable ticker yields an empty frame and `None`, which the caller must treat as
+    missing data -- not as a zero-valued holding.
+    """
+    try:
+        df = fetch_yahoo_history(ticker, start_date)
+    except _FETCH_ERRORS as e:
+        print(f"Error fetching price history for {ticker}: {e}")
+        return pd.DataFrame(columns=['Date', 'close']), None
+    return df[['Date', 'close']], df.attrs.get("currency")
+

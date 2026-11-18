@@ -136,7 +136,12 @@ def fetch_yahoo_price(ticker: str) -> Optional[float]:
 
 
 def fetch_yahoo_history(symbol: str, start_date: str, interval: str = "1d") -> pd.DataFrame:
-    """Daily OHLCV from Yahoo since start_date (YYYY-MM-DD). Indexed and keyed by 'Date'."""
+    """Daily OHLCV from Yahoo since start_date (YYYY-MM-DD). Indexed and keyed by 'Date'.
+
+    Closes are left in the quote currency, which `attrs["currency"]` names -- LSE history comes
+    back as "GBp" (pence). Callers that sum across currencies must convert; `fetch_yahoo_price`
+    normalises pence itself, so the two functions disagree unless you read attrs.
+    """
     period1 = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
     result = _yahoo_chart(symbol, {
         "period1": period1,
@@ -153,6 +158,7 @@ def fetch_yahoo_history(symbol: str, start_date: str, interval: str = "1d") -> p
         df["Date"] = df["Date"].dt.normalize()
     df = df.dropna(subset=["close"])  # Yahoo returns the in-progress bar with null close
     df.index = df["Date"]
+    df.attrs["currency"] = result.get("meta", {}).get("currency")
     return df
 
 

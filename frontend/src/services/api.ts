@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { PortfolioSummary, PortfolioHistoryPoint, CashflowItem, UserProfile, UploadResult } from '../types';
+import { PortfolioSummary, PortfolioHistoryResponse, CashflowItem, UserProfile, UploadResult } from '../types';
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -27,8 +27,11 @@ export const authApi = {
 
 export const portfolioApi = {
   getSummary: async (): Promise<PortfolioSummary> => (await api.get('/trades/summary')).data,
-  getHistory: async (accountId: string = 'default'): Promise<PortfolioHistoryPoint[]> => 
-    (await api.get('/portfolio/history', { params: { account_id: accountId } })).data,
+  // No accountId computes the caller's own portfolio from the uploaded trade history. Passing one
+  // reads a stored series verbatim, which is how the legacy Streamlit app's Trading 212 keys
+  // (e.g. "QX2B3") stay reachable.
+  getHistory: async (accountId?: string): Promise<PortfolioHistoryResponse> =>
+    (await api.get('/portfolio/history', { params: accountId ? { account_id: accountId } : {} })).data,
   getWaterfall: async (): Promise<CashflowItem[]> => (await api.get('/trades/waterfall')).data,
   uploadFiles: async (files: File[]): Promise<UploadResult> => {
     const formData = new FormData();

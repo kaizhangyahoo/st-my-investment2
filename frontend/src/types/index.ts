@@ -87,6 +87,22 @@ export interface PortfolioHistoryPoint {
   value: number;
 }
 
+export interface HistoryDataQuality {
+  degraded: boolean;
+  fx_fallback: boolean;
+  // Trading days dropped because an open position had no close that day. The series is sparse
+  // across those dates, not flat.
+  skipped_dates: number;
+  unpriced_tickers: string[];
+  unconvertible: { ticker: string; currency: string }[];
+}
+
+export interface PortfolioHistoryResponse {
+  points: PortfolioHistoryPoint[];
+  computed_at: string;
+  data_quality: HistoryDataQuality;
+}
+
 export interface CashflowItem {
   category: string;
   amount: number;
