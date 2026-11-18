@@ -86,6 +86,8 @@ def fetch_us_prices(tickers: Iterable[str]) -> Tuple[Dict[str, Optional[float]],
 def fetch_eodhd_price(ticker: str) -> Optional[float]:
     """Last price from EODHD (real-time endpoint, previousClose fallback).
 
+    LSE quotes in pence (GBp) are converted to GBP to match fetch_yahoo_price.
+
     Raises ValueError on a non-200 so the caller can report the reason; the free tier returns 402
     for *every* symbol once the 20-requests/day allowance is spent, not just uncovered exchanges.
     """
@@ -112,7 +114,15 @@ def fetch_eodhd_price(ticker: str) -> Optional[float]:
     if not isinstance(data, dict):
         return None
     close = _to_float(data.get("close"))
-    return close if close is not None else _to_float(data.get("previousClose"))
+    raw = close if close is not None else _to_float(data.get("previousClose"))
+    if raw is None:
+        return None
+    # EODHD quotes LSE instruments (.LSE) in pence (GBp); normalise to GBP (major unit)
+    # to match the contract of fetch_yahoo_price(). EODHD's real-time payload does not
+    # include a currency field, so we key off the mapped suffix.
+    if symbol.endswith(".LSE") or ticker.endswith(".L"):
+        return raw / 100.0
+    return raw
 
 
 def _yahoo_chart(symbol: str, params: dict) -> dict:

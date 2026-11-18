@@ -37,7 +37,7 @@ class TestProviderOrdering(unittest.TestCase):
     def test_yahoo_miss_falls_back_to_eodhd_and_stays_undegraded(self):
         session, calls = session_stub(
             yahoo=lambda url, kw: response(raise_exc=requests.HTTPError("429 Too Many Requests")),
-            eodhd=lambda url, kw: response(payload={"close": 7.72}),
+            eodhd=lambda url, kw: response(payload={"close": 772.0}),
         )
         with patch.object(price_service, "_session", session), \
                 patch.object(settings, "EODHD_API_TOKEN", "fake-token"):
