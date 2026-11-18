@@ -151,6 +151,8 @@ def getEODpriceFromEODHD(symbol_or_symbols, api_token: str = None):
     Uses real-time endpoint (with previousClose fallback for halted/delisted stocks)
     and falls back to EOD historical if needed.
     If the EODHD quota is exhausted (402), LSE symbols fall back to Yahoo via getEODpriceUK.
+    Quotes for LSE instruments (.L / .LSE) are converted from pence (GBp) to pounds (GBP)
+    to return prices in the major currency unit.
     """
     token = api_token
     if not token:
@@ -168,6 +170,7 @@ def getEODpriceFromEODHD(symbol_or_symbols, api_token: str = None):
 
     def _fetch_single(symbol: str):
         ticker = symbol.strip()
+        is_lse = ticker.endswith('.L') or ticker.endswith('.LSE')
         if ticker.endswith('.L'):
             ticker = ticker[:-2] + '.LSE'
         elif ticker.endswith('.DE'):
@@ -181,14 +184,18 @@ def getEODpriceFromEODHD(symbol_or_symbols, api_token: str = None):
                 if isinstance(data, dict):
                     close_val = data.get('close')
                     if close_val not in (None, 'NA', 'None', ''):
-                        return float(close_val)
+                        val = float(close_val)
+                        return val / 100.0 if is_lse else val
                     prev_close = data.get('previousClose')
                     if prev_close not in (None, 'NA', 'None', ''):
-                        return float(prev_close)
+                        val = float(prev_close)
+                        return val / 100.0 if is_lse else val
             elif response.status_code == 402:
                 print(f"EODHD daily request limit exceeded (402) for {ticker}: {response.text.strip()}")
                 # Each suffix needs its own unit: pence for LSE, euros for XETRA.
                 yahoo_symbol = symbol.strip()
+                if yahoo_symbol.endswith('.LSE'):
+                    yahoo_symbol = yahoo_symbol[:-4] + '.L'
                 if yahoo_symbol.endswith('.L'):
                     print(f"Falling back to Yahoo Finance for {yahoo_symbol}.")
                     return getEODpriceUK([yahoo_symbol]).get(yahoo_symbol)
@@ -209,7 +216,8 @@ def getEODpriceFromEODHD(symbol_or_symbols, api_token: str = None):
                 if isinstance(data, list) and len(data) > 0:
                     close_val = data[0].get('close')
                     if close_val not in (None, 'NA', 'None', ''):
-                        return float(close_val)
+                        val = float(close_val)
+                        return val / 100.0 if is_lse else val
         except Exception as e:
             print(f"Error fetching EOD price for {ticker}: {e}")
 

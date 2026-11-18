@@ -154,6 +154,42 @@ class TestKan21Eodhd402Fallback(unittest.TestCase):
             self.assertNotIsInstance(value, dict)
 
 
+class TestEodhd200LseConversion(unittest.TestCase):
+    """LSE quotes in pence (close, previousClose, or EOD fallback) must convert to GBP on 200."""
+
+    @staticmethod
+    def _resp_200(data):
+        r = mock.Mock(spec=requests.Response)
+        r.status_code = 200
+        r.json.return_value = data
+        return r
+
+    def test_lse_200_close_returns_pounds(self):
+        resp = self._resp_200({"code": "SDR.LSE", "close": 1234.0})
+        with mock.patch.object(getEODprice.requests, 'get', return_value=resp):
+            price = getEODprice.getEODpriceFromEODHD('SDR.L', api_token='test-token')
+        self.assertAlmostEqual(price, 12.34)
+
+    def test_lse_200_previous_close_returns_pounds(self):
+        resp = self._resp_200({"code": "SDR.LSE", "previousClose": 1234.0})
+        with mock.patch.object(getEODprice.requests, 'get', return_value=resp):
+            price = getEODprice.getEODpriceFromEODHD('SDR.L', api_token='test-token')
+        self.assertAlmostEqual(price, 12.34)
+
+    def test_xetra_200_returns_euros_unscaled(self):
+        resp = self._resp_200({"code": "AFX.XETRA", "close": 46.8})
+        with mock.patch.object(getEODprice.requests, 'get', return_value=resp):
+            price = getEODprice.getEODpriceFromEODHD('AFX.DE', api_token='test-token')
+        self.assertAlmostEqual(price, 46.8)
+
+    def test_lse_200_eod_historical_fallback_returns_pounds(self):
+        rt_fail = mock.Mock(spec=requests.Response, status_code=500)
+        eod_ok = self._resp_200([{"code": "SDR.LSE", "close": 1234.0}])
+        with mock.patch.object(getEODprice.requests, 'get', side_effect=[rt_fail, eod_ok]):
+            price = getEODprice.getEODpriceFromEODHD('SDR.L', api_token='test-token')
+        self.assertAlmostEqual(price, 12.34)
+
+
 class TestKan23SyntheticEndDate(unittest.TestCase):
     """KAN-23: a missing LastDate produced NaT and crashed bdate_range.
 
