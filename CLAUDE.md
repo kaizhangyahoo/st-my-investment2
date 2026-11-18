@@ -82,8 +82,9 @@ Authentication supports: Google (Streamlit native OIDC), GitHub/Facebook (stream
 | `rewrite_ticker_resolution.py` | Resolves instrument names → Yahoo Finance tickers via SEC EDGAR |
 | `trading212_api.py` | Trading 212 REST API client with cursor-based pagination (`fetch_all_paginated()`) |
 | `alpaca_client.py` | Alpaca Market Data v2 API client |
-| `market_data_api.py` | Yahoo Finance OHLC, Finage (threaded with semaphore), Nasdaq Data Link classes |
-| `getEODprice.py` | TwelveData and EOD Historical Data price fetching |
+| `market_data_api.py` | *(Streamlit-only)* Yahoo Finance OHLC, Finage (threaded with semaphore), Nasdaq Data Link classes |
+| `getEODprice.py` | *(Streamlit-only)* TwelveData and EOD Historical Data price fetching |
+| `backend/app/services/price_service.py` | Market price fetcher for FastAPI backend (Yahoo primary, TwelveData & EODHD fallbacks; no Streamlit dependency) |
 | `firebase_service.py` | Firebase Admin SDK init, Firestore login logging (symlinked from `.agent/skills/users-login-record-firebase/scripts/`) |
 | `miniEnc.py` | XOR+base64 obfuscation for API keys embedded in source — obfuscation only, not real encryption |
 | `trading212/t212enc.py` / `t212dec.py` | Fernet/PBKDF2 encryption for Trading 212 API credentials stored in `trading212/t212.dat` |

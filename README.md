@@ -139,10 +139,10 @@ pip install -r requirements.txt           # legacy root modules the backend stil
 npm install --prefix frontend
 ```
 > **Both requirements files are required.** The backend reaches legacy root modules at runtime —
-> `getEODprice.py` imports `streamlit` at module level and `firebase_service.py` needs
-> `firebase-admin`, neither of which is in `backend/requirements.txt`. `market_service.py` and
-> `auth_service.py` swallow the resulting `ImportError`, so a backend-only install starts fine but
-> returns `None` for every live quote.
+> `firebase_service.py` requires `firebase-admin`, `trading212_api.py` is needed for Trading 212
+> integration, and `rewrite_ticker_resolution.py` is needed for SEC ticker mapping, none of which
+> are included in `backend/requirements.txt`. Note that market price fetching is decoupled and
+> handled independently by `backend/app/services/price_service.py` (which has no Streamlit dependency).
 
 > **Behind a corporate package mirror,** `npm install` and `pip install` may fail even though the
 > packages resolve: `frontend/package-lock.json` pins `registry.npmjs.org` URLs that an

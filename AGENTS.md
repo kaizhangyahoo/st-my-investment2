@@ -11,7 +11,9 @@ Streamlit-based Portfolio Management Dashboard deployed to Google Cloud Run (GCP
 | `rewrite_login.py` | **Main app entry point** — Streamlit login/auth flow, dashboard orchestrator |
 | `FNZ-perf-streamlit-report.py` | Secondary Streamlit app — FNZ Vanguard performance report viewer |
 | `firebase_service.py` | Firebase Firestore login event logging, email/password auth helpers |
-| `alpaca_client.py`, `market_data_api.py`, `trading212_api.py` | Broker/market data API clients |
+| `backend/` | FastAPI REST API backend (`backend/app/services/price_service.py` handles backend market data) |
+| `frontend/` | React 18 + Vite SPA (Tailwind CSS, Stitch dark theme) |
+| `alpaca_client.py`, `market_data_api.py`, `trading212_api.py` | Broker/market data API clients (`market_data_api.py` & `getEODprice.py` are legacy Streamlit-only) |
 | `trading212/` | Trading212 history processing (`merge_trading212_history.py`, `t212dec.py`, `t212enc.py`) |
 | `ig/` | IG broker news download scripts (Dockerized for RPI4/ARM64) |
 | `terraform/` | GCP Cloud Run infrastructure (main.tf, state) |
