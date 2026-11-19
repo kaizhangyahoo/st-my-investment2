@@ -5,14 +5,14 @@ import json
 import os
 import time
 from datetime import datetime, timedelta
-from shared_service.ticker_resolution import use_sec_site
+from rewrite_ticker_resolution import use_sec_site
 from getEODprice import getEODpriceUSA, getEODpriceFromEODHD
 import rewrite_plot_portfolio_weights as ppw # TODO: rename to make it more intuitive
 from market_data_api import OHLC_YahooFinance, HistoricalMarketData
 import glob, socket, platform
 
 from trading212.t212dec import lss
-from shared_service.trading212_api import Trading212API
+from trading212_api import Trading212API
 import re
 
 
