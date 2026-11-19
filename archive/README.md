@@ -10,3 +10,11 @@ This directory contains legacy/unused scripts and alternate variants that are no
 - `scrape_news_requests.py`: Standalone news scraping prototype using Requests.
 
 > **Note:** Imports for modules that moved to `shared_service/` have been updated to their new paths. Other imports are preserved in their legacy state. Run from the repo root: `streamlit run archive/rewrite_tab_4pi.py`.
+
+
+To run the script on a PI, 
+```bash
+ssh pi@[IP_ADDRESS]
+cd /home/pi/my-investment
+venv/bin/streamlit run archive/rewrite_tab_4pi.py
+```
