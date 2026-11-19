@@ -16,7 +16,7 @@ const PLOT = { left: 50, right: 870, top: 40, bottom: 210 };
 const GRID_Y = [40, 90, 140, 190];
 
 const STATUS: Record<FeedState, { label: string; text: string; dot: string }> = {
-  loading: { label: 'COMPUTING…', text: 'text-amber-400', dot: 'bg-amber-400' },
+  loading: { label: 'LOADING…', text: 'text-amber-400', dot: 'bg-amber-400' },
   live: { label: 'COMPUTED', text: 'text-primary', dot: 'bg-primary' },
   partial: { label: 'PARTIAL', text: 'text-amber-400', dot: 'bg-amber-400' },
   degraded: { label: 'DEGRADED', text: 'text-error', dot: 'bg-error' },
@@ -84,13 +84,32 @@ export const PerformanceBlotterView: React.FC = () => {
     detail: [],
   });
   const [timeframe, setTimeframe] = useState<Timeframe>('ALL');
+  const [accountId, setAccountId] = useState<string | undefined>(undefined);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [computing, setComputing] = useState(false);
+  const [computeReport, setComputeReport] = useState<string[]>([]);
+
+  const recompute = async () => {
+    setComputing(true);
+    try {
+      const res = await portfolioApi.computeHistory();
+      setComputeReport(deriveState(res).detail.map((d) => `Last compute: ${d}`));
+    } catch (err: any) {
+      setComputeReport([`POST /api/v1/portfolio/history/compute failed: ${err?.message ?? 'unknown error'}`]);
+    } finally {
+      setComputing(false);
+      setReloadKey((k) => k + 1);
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
       setStatus({ state: 'loading', detail: [] });
       try {
-        const data = await portfolioApi.getHistory();
+        const data = await portfolioApi.getHistory(accountId);
         setResponse(data);
+        setAccounts(data.accounts ?? []);
         setStatus(deriveState(data));
       } catch (err: any) {
         // Never swallowed: a silent failure used to be indistinguishable from a real series,
@@ -109,7 +128,7 @@ export const PerformanceBlotterView: React.FC = () => {
       }
     };
     load();
-  }, []);
+  }, [accountId, reloadKey]);
 
   const points = response?.points ?? [];
 
@@ -145,12 +164,39 @@ export const PerformanceBlotterView: React.FC = () => {
               Performance Blotter & Historical Alpha Telemetry
             </span>
             <span className="font-label-caps text-[10px] text-outline block">
-              PORTFOLIO HISTORY OVER TIME • COMPUTED FROM YOUR UPLOADED TRADE HISTORY
+              PORTFOLIO HISTORY OVER TIME • FROM STORED PORTFOLIO VALUES
             </span>
           </div>
         </div>
 
         <div className="flex items-center gap-space-sm">
+          {accounts.length > 0 && (
+            <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
+              {[undefined, ...accounts].map((acc) => (
+                <button
+                  key={acc ?? 'TOTAL'}
+                  type="button"
+                  onClick={() => setAccountId(acc)}
+                  className={`px-2 py-0.5 rounded transition-colors ${
+                    accountId === acc
+                      ? 'bg-surface-container-high text-primary font-bold'
+                      : 'text-outline hover:text-on-surface'
+                  }`}
+                >
+                  {acc ?? 'TOTAL'}
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={recompute}
+            disabled={computing}
+            title="Value the uploaded trade history and store it in user_portfolio_values.json"
+            className="px-2 py-1 rounded border border-surface-container text-xs font-mono text-outline hover:text-on-surface disabled:opacity-50"
+          >
+            {computing ? 'RECOMPUTING…' : 'RECOMPUTE'}
+          </button>
           <span
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono font-medium ${presentation.text}`}
             title={status.detail.join('\n')}
@@ -183,6 +229,17 @@ export const PerformanceBlotterView: React.FC = () => {
           {status.detail.map((d) => (
             <li key={d} className="flex gap-2">
               <span className="text-error">!</span>
+              {d}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {computeReport.length > 0 && (
+        <ul className="bg-surface-container-low p-space-md rounded-xl border border-amber-400/40 text-xs font-mono text-on-surface-variant space-y-1">
+          {computeReport.map((d) => (
+            <li key={d} className="flex gap-2">
+              <span className="text-amber-400">i</span>
               {d}
             </li>
           ))}
@@ -247,15 +304,15 @@ export const PerformanceBlotterView: React.FC = () => {
               </span>
               <span className="font-data-mono-sm text-sm text-on-surface-variant">
                 {status.state === 'loading'
-                  ? 'Computing historical values…'
+                  ? 'Loading historical values…'
                   : status.state === 'offline'
                     ? 'Could not load the history series.'
                     : 'No historical values for this portfolio.'}
               </span>
               <span className="font-data-mono-sm text-[10px] text-outline max-w-md">
                 {status.state === 'loading'
-                  ? 'Each trading day is valued against that day’s closes and FX.'
-                  : 'Upload a trade history on the IG CSV tab — nothing is charted until there is a real series.'}
+                  ? 'Reading stored daily portfolio values.'
+                  : 'No values are stored in user_portfolio_values.json — nothing is charted until there is a real series.'}
               </span>
             </div>
           ) : (

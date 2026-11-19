@@ -78,6 +78,9 @@ class PortfolioHistoryResponse(BaseModel):
     points: List[PortfolioHistoryPoint]
     computed_at: str
     data_quality: HistoryDataQuality
+    # Account keys stored in user_portfolio_values.json; `account_id` is None for the total.
+    accounts: List[str] = []
+    account_id: Optional[str] = None
 
 class BenchmarkPoint(BaseModel):
     date: str

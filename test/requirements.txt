@@ -12,6 +12,9 @@
 # UploadFile(file, *, filename=..., size=..., headers=...) -- keyword-only.
 starlette>=0.24
 
+# starlette.testclient (used by the endpoint tests) refuses to load without it.
+httpx2
+
 # Browser end-to-end tests under .agent/skills/playwright_testing/examples/.
 # Nothing under test/ needs these; the test/ suites are stdlib unittest and run
 # offline with no third-party runner.

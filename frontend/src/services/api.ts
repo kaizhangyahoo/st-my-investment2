@@ -27,11 +27,14 @@ export const authApi = {
 
 export const portfolioApi = {
   getSummary: async (): Promise<PortfolioSummary> => (await api.get('/trades/summary')).data,
-  // No accountId computes the caller's own portfolio from the uploaded trade history. Passing one
-  // reads a stored series verbatim, which is how the legacy Streamlit app's Trading 212 keys
-  // (e.g. "QX2B3") stay reachable.
+  // Served from user_portfolio_values.json. No accountId returns every stored account summed
+  // per date; passing one (e.g. "QX2B3") returns that account's series.
   getHistory: async (accountId?: string): Promise<PortfolioHistoryResponse> =>
     (await api.get('/portfolio/history', { params: accountId ? { account_id: accountId } : {} })).data,
+  // Values the uploaded trade history and writes it to user_portfolio_values.json. data_quality
+  // describes this run only.
+  computeHistory: async (refresh = false): Promise<PortfolioHistoryResponse> =>
+    (await api.post('/portfolio/history/compute', null, { params: { refresh } })).data,
   getWaterfall: async (): Promise<CashflowItem[]> => (await api.get('/trades/waterfall')).data,
   uploadFiles: async (files: File[]): Promise<UploadResult> => {
     const formData = new FormData();

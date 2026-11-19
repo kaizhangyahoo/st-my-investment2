@@ -101,6 +101,9 @@ export interface PortfolioHistoryResponse {
   points: PortfolioHistoryPoint[];
   computed_at: string;
   data_quality: HistoryDataQuality;
+  // Account keys stored in user_portfolio_values.json; account_id is null for the summed total.
+  accounts: string[];
+  account_id: string | null;
 }
 
 export interface CashflowItem {

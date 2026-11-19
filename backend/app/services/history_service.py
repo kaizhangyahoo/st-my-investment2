@@ -185,6 +185,42 @@ def read_cached_series(key: str) -> List[Dict[str, Any]]:
     return points
 
 
+def stored_accounts() -> List[str]:
+    """Every account key with at least one stored value."""
+    return sorted(k for k, v in _read_cache_file().items() if isinstance(v, dict) and v)
+
+
+def read_consolidated_series() -> List[Dict[str, Any]]:
+    """Sum of every stored account per date.
+
+    Each account is forward-filled only inside its own recorded date range, so a date one
+    account skipped does not dip the total, and nothing is invented before an account's first
+    or after its last stored value.
+    """
+    columns: Dict[str, pd.Series] = {}
+    for key, account in _read_cache_file().items():
+        if not isinstance(account, dict):
+            continue
+        s = pd.Series(
+            {d: float(v) for d, v in account.items() if v is not None}, dtype="float64"
+        )
+        if s.empty:
+            continue
+        s.index = pd.to_datetime(s.index, errors="coerce")
+        s = s[s.index.notna()]
+        columns[key] = s[~s.index.duplicated(keep="last")].sort_index()
+    if not columns:
+        return []
+
+    frame = pd.DataFrame(columns).sort_index()
+    in_range = pd.DataFrame(
+        {k: (frame.index >= s.index.min()) & (frame.index <= s.index.max()) for k, s in columns.items()},
+        index=frame.index,
+    )
+    total = frame.ffill().where(in_range).sum(axis=1, min_count=1).dropna()
+    return [{"date": d.strftime("%Y-%m-%d"), "value": float(v)} for d, v in total.items()]
+
+
 def compute_history(
     df_trade_history: pd.DataFrame, key: str, force_recompute: bool = False
 ) -> Dict[str, Any]:
