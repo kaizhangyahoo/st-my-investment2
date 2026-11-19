@@ -25,8 +25,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
 
   return (
     <header
-      className={`fixed top-0 right-0 h-16 bg-surface/90 backdrop-blur-xl z-40 flex items-center justify-between px-space-lg shadow-[0_1px_8px_rgba(0,0,0,0.3)] border-b border-surface-container transition-all duration-300 ${isSidebarCollapsed ? 'left-16' : 'left-60'
-        }`}
+      className={`fixed top-0 right-0 h-16 bg-surface/90 backdrop-blur-xl z-40 flex items-center justify-between px-space-lg shadow-[0_1px_8px_rgba(0,0,0,0.3)] border-b border-surface-container transition-all duration-300 ${
+        isSidebarCollapsed ? 'left-16' : 'left-60'
+      }`}
     >
       {/* Left: Sidebar Toggle + Title */}
       <div className="flex items-center gap-space-md">
@@ -54,7 +55,6 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
 
       {/* Right Controls: Dev Mode, Actions */}
       <div className="flex items-center gap-space-sm">
-
         {/* Local Dev Mode Badge */}
         <div className="flex items-center gap-1 px-2 py-1 rounded bg-surface-container-high border border-primary/30 text-primary font-label-caps text-label-caps">
           <span className="material-symbols-outlined text-[13px] text-primary">lock_open</span>
