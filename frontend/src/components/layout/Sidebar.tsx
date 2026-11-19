@@ -1,5 +1,4 @@
 import React from 'react';
-import { FeedState, FeedStatus } from '../../types';
 
 export type WorkspaceTab = 'ig-csv-analysis' | 'trading-212-api' | 'reference-data' | 'performance-blotter';
 
@@ -9,24 +8,7 @@ interface SidebarProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   unresolvedCount?: number;
-  feed?: FeedStatus;
 }
-
-const FEED_PRESENTATION: Record<FeedState, { label: string; text: string; dot: string; pulse: boolean }> = {
-  loading: { label: 'SYNCING…', text: 'text-amber-400', dot: 'bg-amber-400', pulse: true },
-  live: { label: 'LIVE_SYNC', text: 'text-primary', dot: 'bg-primary', pulse: true },
-  partial: { label: 'PARTIAL', text: 'text-amber-400', dot: 'bg-amber-400', pulse: false },
-  degraded: { label: 'DEGRADED', text: 'text-error', dot: 'bg-error', pulse: true },
-  offline: { label: 'FEED_ERROR', text: 'text-error', dot: 'bg-error', pulse: true },
-};
-
-const FEED_HEADLINE: Record<FeedState, string> = {
-  loading: 'Fetching live prices — figures shown are sample data',
-  live: 'All positions priced from live market data',
-  partial: 'Priced via fallback provider',
-  degraded: 'Live data incomplete — figures are unreliable',
-  offline: 'Cannot reach the backend',
-};
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
@@ -34,10 +16,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed,
   onToggleCollapse,
   unresolvedCount = 0,
-  feed = { state: 'loading', detail: [] },
 }) => {
-  const presentation = FEED_PRESENTATION[feed.state];
-  const isBad = feed.state === 'degraded' || feed.state === 'offline';
   return (
     <aside
       className={`fixed left-0 top-0 h-full bg-surface-container-lowest z-50 flex flex-col justify-between shadow-[0_1px_8px_rgba(0,0,0,0.2)] transition-all duration-300 border-r border-surface-container ${
@@ -179,54 +158,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   14ms
                 </span>
               </div>
-              <div
-                className={`group relative flex items-center justify-between px-space-md py-space-xs rounded bg-surface-container-low border cursor-help ${
-                  isBad ? 'border-error/50 bg-error-container/10' : 'border-surface-container/40'
-                }`}
-              >
+              <div className="flex items-center justify-between px-space-md py-space-xs rounded bg-surface-container-low border border-surface-container/40">
                 <span className="font-label-caps text-label-caps text-on-surface-variant">FEED STATUS</span>
-                <span
-                  className={`font-data-mono-sm text-data-mono-sm uppercase font-medium flex items-center gap-1.5 ${presentation.text}`}
-                >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full ${presentation.dot} ${
-                      presentation.pulse ? 'animate-pulse' : ''
-                    }`}
-                  ></span>
-                  {presentation.label}
+                <span className="font-data-mono-sm text-data-mono-sm text-primary uppercase font-medium">
+                  LIVE_SYNC
                 </span>
-
-                {/* Hover detail: names the error and which provider it came from. */}
-                <div
-                  role="tooltip"
-                  className="pointer-events-none absolute left-full top-0 ml-2 w-72 z-50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg border border-surface-container bg-surface-container-highest p-space-sm shadow-lg"
-                >
-                  <span className={`font-label-caps text-[10px] uppercase font-semibold block ${presentation.text}`}>
-                    {FEED_HEADLINE[feed.state]}
-                  </span>
-                  {feed.detail.length > 0 && (
-                    <ul className="mt-1.5 flex flex-col gap-1">
-                      {feed.detail.map((line) => (
-                        <li
-                          key={line}
-                          className="font-data-mono-sm text-[10px] leading-snug text-on-surface-variant break-words"
-                        >
-                          {line}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
               </div>
             </div>
           </>
-        )}
-
-        {/* Collapsed rail: System Feeds is hidden, so keep a failure visible as a dot. */}
-        {isCollapsed && isBad && (
-          <div className="flex justify-center pt-space-lg" title={`${FEED_HEADLINE[feed.state]}\n${feed.detail.join('\n')}`}>
-            <span className={`w-2.5 h-2.5 rounded-full ${presentation.dot} animate-pulse`}></span>
-          </div>
         )}
       </div>
 

@@ -25,9 +25,8 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
 
   return (
     <header
-      className={`fixed top-0 right-0 h-16 bg-surface/90 backdrop-blur-xl z-40 flex items-center justify-between px-space-lg shadow-[0_1px_8px_rgba(0,0,0,0.3)] border-b border-surface-container transition-all duration-300 ${
-        isSidebarCollapsed ? 'left-16' : 'left-60'
-      }`}
+      className={`fixed top-0 right-0 h-16 bg-surface/90 backdrop-blur-xl z-40 flex items-center justify-between px-space-lg shadow-[0_1px_8px_rgba(0,0,0,0.3)] border-b border-surface-container transition-all duration-300 ${isSidebarCollapsed ? 'left-16' : 'left-60'
+        }`}
     >
       {/* Left: Sidebar Toggle + Title */}
       <div className="flex items-center gap-space-md">
@@ -53,16 +52,8 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         </div>
       </div>
 
-      {/* Right Controls: Spot Rate, Dev Mode, Actions */}
+      {/* Right Controls: Dev Mode, Actions */}
       <div className="flex items-center gap-space-sm">
-        {/* Spot Ticker */}
-        <div className="hidden lg:flex items-center gap-1.5 px-space-md py-1 rounded bg-surface-container-low border border-surface-container/60 font-data-mono-sm text-data-mono-sm text-on-surface-variant">
-          <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-          <span className="text-outline">SPOT:</span>
-          <span className="text-primary font-medium">GBP/USD 1.2941</span>
-          <span className="text-outline mx-1">•</span>
-          <span className="text-secondary font-medium">GBP/EUR 1.1895</span>
-        </div>
 
         {/* Local Dev Mode Badge */}
         <div className="flex items-center gap-1 px-2 py-1 rounded bg-surface-container-high border border-primary/30 text-primary font-label-caps text-label-caps">

@@ -1,14 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { portfolioApi } from '../../services/api';
-import { ChartTrade, PriceTradeChart } from './PriceTradeChart';
-import { FeedStatus, PortfolioSummary, Position, TradeActivityItem, UploadResult } from '../../types';
+import { PortfolioSummary, Position, UploadResult } from '../../types';
 
 interface IgAnalyticsViewProps {
   summary: PortfolioSummary | null;
   onReset: () => void;
   onUploadComplete: (res: UploadResult) => void;
-  feed?: FeedStatus;
 }
 
 // Default institutional fallback dataset matching Stitch design
@@ -25,21 +23,7 @@ const SAMPLE_POSITIONS: Position[] = [
   { ticker: 'FIRY', market: 'First Republic Trust Liquid', quantity: 80, current_price: 12.40, market_value_gbp: 768.00, pnl_gbp: -320.00, currency: 'USD' },
 ];
 
-type ActivityPeriod = 'QUARTER' | 'YEAR' | 'ALL';
-type ActivitySide = 'ALL' | 'BUY' | 'SELL';
-
-const SESSION_SUFFIX = /\s*\((?:24 Hours|All Sessions|Extended Hours)\)\s*$/i;
-
-// Backend sends ISO dates; older payloads may still carry IG's DD/MM/YYYY.
-const parseActivityDate = (raw: string): Date | null => {
-  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(raw);
-  if (iso) return new Date(+iso[1], +iso[2] - 1, +iso[3]);
-  const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(raw);
-  if (dmy) return new Date(+dmy[3], +dmy[2] - 1, +dmy[1]);
-  return null;
-};
-
-const SAMPLE_TRADE_ACTIVITY: TradeActivityItem[] = [
+const SAMPLE_TRADE_ACTIVITY = [
   { qty: 40, fill: '$128.10', value: '£3,959.81', date: '2026-10-24', time: '14:22:04', activity: 'BUY', market: 'NVIDIA Corp (NVDA)' },
   { qty: 15, fill: '$938.50', value: '£10,878.02', date: '2026-10-18', time: '15:10:33', activity: 'BUY', market: 'Lam Research Corp (LRCX)' },
   { qty: 25, fill: '$130.40', value: '£2,519.32', date: '2026-10-12', time: '18:04:12', activity: 'SELL', market: '3M Company (MMM)' },
@@ -52,19 +36,13 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   summary,
   onReset,
   onUploadComplete,
-  feed = { state: 'live', detail: [] },
 }) => {
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
-  const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>('QUARTER');
-  const [activitySide, setActivitySide] = useState<ActivitySide>('ALL');
-  const [instrumentQuery, setInstrumentQuery] = useState('');
-  const [selectedInstrumentKey, setSelectedInstrumentKey] = useState<string | null>(null);
-  const [showInstrumentSuggestions, setShowInstrumentSuggestions] = useState(false);
-  const [highlightedSuggestion, setHighlightedSuggestion] = useState(-1);
+  const [selectedTicker, setSelectedTicker] = useState('MMM');
+  const [activityFilter, setActivityFilter] = useState<'ALL' | 'BUYS' | 'SELLS'>('ALL');
 
   // File Upload via Dropzone
   const onDrop = async (acceptedFiles: File[]) => {
@@ -153,127 +131,13 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
     ? summary.trade_activities
     : SAMPLE_TRADE_ACTIVITY;
 
-  // Positions carry tickers for currently-held instruments; use them when an activity row has none.
-  const tickerByMarket = new Map(positions.map((p) => [p.market, p.ticker]));
-  const activityTicker = (item: TradeActivityItem) => item.ticker || tickerByMarket.get(item.market) || '';
-
-  const now = new Date();
-  const quarterIndex = Math.floor(now.getMonth() / 3);
-  const quarterLabel = `Q${quarterIndex + 1} ${now.getFullYear()}`;
-  const periodStart: Record<ActivityPeriod, Date | null> = {
-    QUARTER: new Date(now.getFullYear(), quarterIndex * 3, 1),
-    YEAR: new Date(now.getFullYear(), 0, 1),
-    ALL: null,
-  };
-  const inPeriod = (item: TradeActivityItem, period: ActivityPeriod) => {
-    const start = periodStart[period];
-    if (!start) return true;
-    const d = parseActivityDate(item.date);
-    return d !== null && d >= start;
-  };
-
-  // IG lists one stock under several session variants, e.g. "Apple Inc (24 Hours)" and
-  // "Apple Inc (All Sessions)". Group them by ticker (or by name without the session suffix)
-  // so searching or picking an instrument returns trades from every variant.
-  const baseNameOf = (market: string) => market.replace(SESSION_SUFFIX, '').trim();
-  const tickerByBaseName = new Map<string, string>();
-  tradeActivities.forEach((a) => {
-    const t = activityTicker(a);
-    if (t && !tickerByBaseName.has(baseNameOf(a.market))) tickerByBaseName.set(baseNameOf(a.market), t);
-  });
-  const instrumentKeyOf = (item: TradeActivityItem) => {
-    const base = baseNameOf(item.market);
-    return activityTicker(item) || tickerByBaseName.get(base) || base.toLowerCase();
-  };
-
-  const instrumentGroups = new Map<string, { key: string; label: string; ticker: string; variants: string[] }>();
-  tradeActivities.forEach((a) => {
-    const key = instrumentKeyOf(a);
-    const group = instrumentGroups.get(key);
-    if (!group) {
-      const base = baseNameOf(a.market);
-      instrumentGroups.set(key, {
-        key,
-        label: base,
-        ticker: activityTicker(a) || tickerByBaseName.get(base) || '',
-        variants: [a.market],
-      });
-    } else if (!group.variants.includes(a.market)) {
-      group.variants.push(a.market);
-    }
+  const filteredActivity = tradeActivities.filter((item) => {
+    if (activityFilter === 'BUYS') return item.activity === 'BUY';
+    if (activityFilter === 'SELLS') return item.activity === 'SELL';
+    return true;
   });
 
-  const normalizedQuery = instrumentQuery.trim().toLowerCase();
-  const groupMatchesQuery = (g: { label: string; ticker: string; variants: string[] }) =>
-    !normalizedQuery ||
-    g.ticker.toLowerCase().includes(normalizedQuery) ||
-    g.label.toLowerCase().includes(normalizedQuery) ||
-    g.variants.some((v) => v.toLowerCase().includes(normalizedQuery));
-
-  // Unique instruments across the whole ledger, so suggestions aren't limited by the period filter.
-  const instrumentOptions = Array.from(instrumentGroups.values()).sort((a, b) => a.label.localeCompare(b.label));
-  // After a pick the box holds a display label, not a query, so offer the full list to switch.
-  const instrumentSuggestions = selectedInstrumentKey
-    ? instrumentOptions
-    : instrumentOptions.filter(groupMatchesQuery);
-  const matchingInstrumentKeys = new Set(instrumentSuggestions.map((g) => g.key));
-
-  const matchesInstrument = (item: TradeActivityItem) =>
-    selectedInstrumentKey
-      ? instrumentKeyOf(item) === selectedInstrumentKey
-      : !normalizedQuery || matchingInstrumentKeys.has(instrumentKeyOf(item));
-
-  const selectInstrument = (group: { key: string; label: string; ticker: string } | null) => {
-    setInstrumentQuery(group ? (group.ticker ? `${group.label} (${group.ticker})` : group.label) : '');
-    setSelectedInstrumentKey(group ? group.key : null);
-    setShowInstrumentSuggestions(false);
-    setHighlightedSuggestion(-1);
-  };
-
-  const instrumentActivities = tradeActivities.filter(matchesInstrument);
-  const periodActivities = instrumentActivities.filter((a) => inPeriod(a, activityPeriod));
-  const filteredActivity = periodActivities.filter(
-    (a) => activitySide === 'ALL' || a.activity === activitySide
-  );
-
-  const selectedHolding = selectedTicker ? positions.find((p) => p.ticker === selectedTicker) || null : null;
-
-  // Every ledger trade for the inspected instrument, across all IG session variants.
-  const inspectorTrades = selectedHolding
-    ? tradeActivities
-        .filter((a) => instrumentKeyOf(a) === selectedHolding.ticker || baseNameOf(a.market) === baseNameOf(selectedHolding.market))
-        .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time))
-    : [];
-  const inspectorTradesKey = inspectorTrades.map((t) => `${t.date}|${t.activity}|${t.qty}|${t.fill}`).join(';');
-  const chartTrades = useMemo<ChartTrade[]>(
-    () =>
-      inspectorTrades.map((t) => {
-        const d = parseActivityDate(t.date);
-        const price = parseFloat(t.fill.replace(/[^0-9.-]/g, ''));
-        return {
-          date: d
-            ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-            : t.date,
-          side: t.activity === 'SELL' ? 'SELL' : 'BUY',
-          qty: t.qty,
-          price: Number.isFinite(price) && price > 0 ? price : null,
-        };
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inspectorTradesKey]
-  );
-
-  useEffect(() => {
-    if (!selectedHolding) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSelectedTicker(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [selectedHolding]);
-
-  // Every figure on this page is a placeholder when this is true, so the status bar has to say so.
-  const isShowingSamples = !isMissingTradeHistory && !hasLivePositions;
+  const selectedHolding = positions.find((p) => p.ticker === selectedTicker) || positions[0] || null;
 
   return (
     <div className="space-y-space-lg pb-16">
@@ -346,61 +210,33 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
           </div>
 
           {/* Active File Status Bar */}
-          <div className="pt-3 mt-3 border-t border-surface-container/40 text-on-surface-variant">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5 truncate max-w-[240px]">
-                <span
-                  className={`material-symbols-outlined text-[15px] ${
-                    feed.state === 'loading' ? 'text-amber-400 animate-spin' : 'text-secondary'
-                  }`}
-                >
-                  {feed.state === 'loading' ? 'sync' : 'description'}
-                </span>
-                <span className="font-data-mono-sm text-data-mono-sm text-secondary truncate" title={displayedFileName}>
-                  {displayedFileName}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                {feed.state === 'loading' ? (
-                  <span className="font-label-caps text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30 animate-pulse">
-                    LOADING…
-                  </span>
-                ) : feed.state === 'offline' ? (
-                  <span className="font-label-caps text-[9px] px-1.5 py-0.5 rounded bg-error-container/30 text-error font-semibold border border-error/40">
-                    FEED_ERROR
-                  </span>
-                ) : isMissingTradeHistory ? (
-                  <span className="font-label-caps text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30">
-                    MISSING TRADE HISTORY
-                  </span>
-                ) : (
-                  <span className="font-label-caps text-label-caps text-outline">PARSER: IG</span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUploadedFiles([]);
-                    onReset();
-                  }}
-                  title="Reset panels"
-                  className="p-1 rounded hover:bg-surface-container text-outline hover:text-tertiary transition-colors"
-                >
-                  <span className="material-symbols-outlined text-[14px]">close</span>
-                </button>
-              </div>
+          <div className="flex items-center justify-between pt-3 mt-3 border-t border-surface-container/40 text-on-surface-variant">
+            <div className="flex items-center gap-1.5 truncate max-w-[240px]">
+              <span className="material-symbols-outlined text-[15px] text-secondary">description</span>
+              <span className="font-data-mono-sm text-data-mono-sm text-secondary truncate" title={displayedFileName}>
+                {displayedFileName}
+              </span>
             </div>
-
-            {feed.state === 'loading' && isShowingSamples && (
-              <span className="block mt-1.5 font-body-sm text-[10px] leading-tight text-amber-400">
-                Showing sample data while prices load — these are not your figures yet.
-              </span>
-            )}
-            {feed.state === 'offline' && (
-              <span className="block mt-1.5 font-data-mono-sm text-[10px] leading-tight text-error">
-                {feed.detail[0] ?? 'Cannot reach the backend.'}
-                {isShowingSamples && ' Figures shown are sample data.'}
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {isMissingTradeHistory ? (
+                <span className="font-label-caps text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30">
+                  MISSING TRADE HISTORY
+                </span>
+              ) : (
+                <span className="font-label-caps text-label-caps text-outline">PARSER: IG</span>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setUploadedFiles([]);
+                  onReset();
+                }}
+                title="Reset panels"
+                className="p-1 rounded hover:bg-surface-container text-outline hover:text-tertiary transition-colors"
+              >
+                <span className="material-symbols-outlined text-[14px]">close</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -529,11 +365,11 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
       </div>
 
       {/* ─────────────────────────────────────────────────────────────
-          MIDDLE SECTION 1: Holdings Matrix (full width)
+          MIDDLE SECTION 1: Holdings Matrix & Currency/Sector Donut
       ───────────────────────────────────────────────────────────── */}
-      <div>
-        {/* Comprehensive Holdings Table */}
-        <div className="bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm flex flex-col">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-space-lg">
+        {/* Comprehensive Holdings Table (8 Cols) */}
+        <div className="xl:col-span-8 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm flex flex-col">
           {/* Header & Search */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-sm mb-space-sm border-b border-surface-container/40">
             <div className="flex items-center gap-space-sm">
@@ -667,378 +503,6 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
             )}
           </div>
         </div>
-      </div>
-
-      {/* ─────────────────────────────────────────────────────────────
-          FLOATING WINDOW: Single Instrument Inspector (opens from the ledger)
-      ───────────────────────────────────────────────────────────── */}
-      {selectedHolding && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setSelectedTicker(null)}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Single Instrument Inspector & Execution Blotter"
-            onClick={(e) => e.stopPropagation()}
-            className="relative w-full max-w-6xl max-h-[90vh] overflow-y-auto bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-2xl"
-          >
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-space-sm border-b border-surface-container/40 mb-space-sm">
-              <div className="flex items-center gap-space-sm">
-                <button
-                  type="button"
-                  onClick={() => setSelectedTicker(null)}
-                  title="Close (Esc)"
-                  aria-label="Close inspector"
-                  className="w-7 h-7 flex items-center justify-center rounded bg-surface-container hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface transition-colors"
-                >
-                  <span className="material-symbols-outlined text-[18px]">close</span>
-                </button>
-                <span className="material-symbols-outlined text-[20px] text-primary">insights</span>
-                <div>
-                  <span className="font-headline-md text-headline-md text-on-surface font-semibold">
-                    Single Instrument Inspector & Execution Blotter
-                  </span>
-                  <div className="font-label-caps text-[10px] text-outline">
-                    FOCUSED INSTRUMENT: {selectedHolding.ticker} • {selectedHolding.market}
-                  </div>
-                </div>
-              </div>
-
-          {/* Instrument Dropdown Selector */}
-          <div className="flex items-center gap-space-sm">
-            <span className="font-label-caps text-label-caps text-on-surface-variant">SWITCH TICKER:</span>
-            <select
-              value={selectedHolding.ticker}
-              onChange={(e) => setSelectedTicker(e.target.value)}
-              className="px-3 py-1.5 rounded bg-surface-container-lowest border border-surface-container text-xs font-mono text-primary font-bold focus:outline-none focus:border-primary"
-            >
-              {positions.map((p) => (
-                <option key={p.ticker} value={p.ticker}>
-                  {p.ticker} — {p.market}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Quick Inspector Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-space-sm mb-space-md">
-          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
-            <span className="font-label-caps text-[10px] text-outline block">CURRENT POSITION</span>
-            <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
-              {selectedHolding.quantity.toLocaleString()} Shares
-            </span>
-          </div>
-          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
-            <span className="font-label-caps text-[10px] text-outline block">AVG EXECUTION BASIS</span>
-            <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
-              ${(selectedHolding.current_price ? selectedHolding.current_price * 0.88 : 112).toFixed(2)}
-            </span>
-          </div>
-          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
-            <span className="font-label-caps text-[10px] text-outline block">CURRENT VALUE (GBP)</span>
-            <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
-              £{selectedHolding.market_value_gbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
-          </div>
-          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
-            <span className="font-label-caps text-[10px] text-outline block">NET UNREALIZED P&L</span>
-            <span className={`font-data-mono-lg text-sm font-semibold ${selectedHolding.pnl_gbp >= 0 ? 'text-primary' : 'text-error'}`}>
-              {selectedHolding.pnl_gbp >= 0 ? '+' : ''}£{selectedHolding.pnl_gbp.toFixed(2)}
-            </span>
-          </div>
-        </div>
-
-        {/* Inspector Chart & Execution History */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-space-md">
-          {/* SVG Price Chart with Execution Markers (8 cols) */}
-          <div className="lg:col-span-8 bg-surface-container-lowest p-space-sm rounded-lg border border-surface-container/40">
-            <div className="flex items-center justify-between px-2 py-1 mb-2 text-xs font-mono text-outline border-b border-surface-container/20">
-              <span className="text-on-surface font-semibold">PRICE TRAJECTORY & EXECUTION FLAGS</span>
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1 text-primary">
-                  <span className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-b-[6px] border-b-primary" />
-                  BUY FILLS
-                </span>
-                <span className="flex items-center gap-1 text-tertiary">
-                  <span className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-tertiary" />
-                  SELL FILLS
-                </span>
-              </div>
-            </div>
-
-            <PriceTradeChart ticker={selectedHolding.ticker} trades={chartTrades} />
-          </div>
-
-          {/* Single Instrument Trade Fills (4 cols) */}
-          <div className="lg:col-span-4 bg-surface-container-lowest p-space-sm rounded-lg border border-surface-container/40 flex flex-col justify-between">
-            <div>
-              <span className="font-label-caps text-label-caps text-outline block mb-2 uppercase">
-                {selectedHolding.ticker} Execution Audit
-              </span>
-              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                {inspectorTrades.length === 0 ? (
-                  <div className="p-3 text-center text-outline font-mono text-xs">
-                    No executions recorded for this instrument.
-                  </div>
-                ) : (
-                  inspectorTrades.map((t, i) => {
-                    const isBuy = t.activity !== 'SELL';
-                    return (
-                      <div
-                        key={`${t.date}-${t.time}-${i}`}
-                        className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono"
-                      >
-                        <div>
-                          <span className={`${isBuy ? 'text-primary' : 'text-tertiary'} font-bold`}>
-                            {isBuy ? 'BUY' : 'SELL'} {t.qty.toLocaleString()} shs
-                          </span>
-                          <span className="text-outline block text-[10px]">
-                            {t.date} {t.time}
-                          </span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-on-surface font-semibold">{t.fill}</span>
-                          {t.value && (
-                            <span className="text-outline block text-[10px]">
-                              {isBuy ? 'Settled' : 'Proceeds'}: {t.value}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            <div className="pt-2 mt-2 border-t border-surface-container/30 flex items-center justify-between text-[11px] font-mono text-outline">
-              <span>BROKER: IG BROKERAGE</span>
-              <span className="text-secondary">{inspectorTrades.length} EXECUTIONS</span>
-            </div>
-          </div>
-        </div>
-          </div>
-        </div>
-      )}
-
-      {/* ─────────────────────────────────────────────────────────────
-          MIDDLE SECTION 3: Trade Activities & Currency/Asset Allocation
-      ───────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-space-lg">
-      {/* Trade Activities (8 Cols) */}
-      <div className="xl:col-span-8 min-w-0 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-sm mb-space-sm border-b border-surface-container/40">
-          <div className="flex items-center gap-space-sm">
-            <span className="material-symbols-outlined text-[18px] text-secondary">history</span>
-            <span className="font-headline-md text-headline-md text-on-surface font-semibold whitespace-nowrap">
-              Trade Activities
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-space-sm">
-            {/* Instrument filter with autocomplete */}
-            <div className="relative">
-              <span className="material-symbols-outlined absolute left-2 top-1.5 text-[15px] text-outline">
-                search
-              </span>
-              <input
-                type="text"
-                role="combobox"
-                aria-expanded={showInstrumentSuggestions && instrumentSuggestions.length > 0}
-                aria-autocomplete="list"
-                placeholder="Instrument, symbol or company..."
-                value={instrumentQuery}
-                onChange={(e) => {
-                  setInstrumentQuery(e.target.value);
-                  setSelectedInstrumentKey(null);
-                  setShowInstrumentSuggestions(true);
-                  setHighlightedSuggestion(-1);
-                }}
-                onFocus={() => setShowInstrumentSuggestions(true)}
-                onBlur={() => setShowInstrumentSuggestions(false)}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    setShowInstrumentSuggestions(true);
-                    setHighlightedSuggestion((i) => Math.min(i + 1, instrumentSuggestions.length - 1));
-                  } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    setHighlightedSuggestion((i) => Math.max(i - 1, 0));
-                  } else if (e.key === 'Enter' && showInstrumentSuggestions && highlightedSuggestion >= 0) {
-                    e.preventDefault();
-                    selectInstrument(instrumentSuggestions[highlightedSuggestion]);
-                  } else if (e.key === 'Escape') {
-                    setShowInstrumentSuggestions(false);
-                  }
-                }}
-                className="pl-7 pr-7 py-1 rounded bg-surface-container-lowest border border-surface-container text-xs font-mono text-on-surface focus:outline-none focus:border-primary w-60"
-              />
-              {instrumentQuery && (
-                <button
-                  type="button"
-                  onClick={() => selectInstrument(null)}
-                  title="Clear instrument filter"
-                  className="absolute right-1.5 top-1 p-0.5 rounded text-outline hover:text-on-surface"
-                >
-                  <span className="material-symbols-outlined text-[14px]">close</span>
-                </button>
-              )}
-              {showInstrumentSuggestions && instrumentSuggestions.length > 0 && (
-                <ul
-                  role="listbox"
-                  className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded border border-surface-container-high bg-surface-container-lowest shadow-lg text-xs font-mono"
-                >
-                  {instrumentSuggestions.map((o, i) => (
-                    <li
-                      key={o.key}
-                      role="option"
-                      aria-selected={i === highlightedSuggestion}
-                      title={o.variants.join('\n')}
-                      // mousedown fires before the input's blur, so the click isn't lost
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        selectInstrument(o);
-                      }}
-                      onMouseEnter={() => setHighlightedSuggestion(i)}
-                      className={`px-2 py-1.5 cursor-pointer flex items-center justify-between gap-2 ${
-                        i === highlightedSuggestion ? 'bg-surface-container-high' : ''
-                      }`}
-                    >
-                      <span className="text-on-surface truncate">
-                        {o.label}
-                        {o.variants.length > 1 && (
-                          <span className="ml-1 text-[10px] text-outline">×{o.variants.length} sessions</span>
-                        )}
-                      </span>
-                      {o.ticker && <span className="text-primary font-semibold shrink-0">{o.ticker}</span>}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {/* Period Pills */}
-            <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
-              {(
-                [
-                  ['QUARTER', quarterLabel],
-                  ['YEAR', 'CURRENT YEAR'],
-                  ['ALL', 'ALL'],
-                ] as [ActivityPeriod, string][]
-              ).map(([period, label]) => (
-                <button
-                  key={period}
-                  type="button"
-                  onClick={() => setActivityPeriod(period)}
-                  className={`px-2.5 py-1 rounded transition-colors ${
-                    activityPeriod === period
-                      ? 'bg-surface-container-high text-primary font-bold'
-                      : 'text-outline hover:text-on-surface'
-                  }`}
-                >
-                  {label} ({instrumentActivities.filter((a) => inPeriod(a, period)).length})
-                </button>
-              ))}
-            </div>
-
-            {/* Side Pills (click again to clear) */}
-            <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
-              <button
-                type="button"
-                onClick={() => setActivitySide((s) => (s === 'BUY' ? 'ALL' : 'BUY'))}
-                className={`px-2.5 py-1 rounded transition-colors ${
-                  activitySide === 'BUY'
-                    ? 'bg-surface-container-high text-primary font-bold'
-                    : 'text-outline hover:text-on-surface'
-                }`}
-              >
-                BUY ({periodActivities.filter((a) => a.activity === 'BUY').length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setActivitySide((s) => (s === 'SELL' ? 'ALL' : 'SELL'))}
-                className={`px-2.5 py-1 rounded transition-colors ${
-                  activitySide === 'SELL'
-                    ? 'bg-surface-container-high text-tertiary font-bold'
-                    : 'text-outline hover:text-on-surface'
-                }`}
-              >
-                SELL ({periodActivities.filter((a) => a.activity === 'SELL').length})
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Activity Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left font-data-mono-sm text-data-mono-sm border-collapse">
-            <thead>
-              <tr className="border-b border-surface-container text-outline uppercase font-label-caps text-[10px]">
-                <th className="py-2 px-space-sm">Activity</th>
-                <th className="py-2 px-space-sm">Market Instrument</th>
-                <th className="py-2 px-space-sm text-right">Qty</th>
-                <th className="py-2 px-space-sm text-right">Fill Price</th>
-                <th className="py-2 px-space-sm text-right">Settled Value (GBP)</th>
-                <th className="py-2 px-space-sm">Date</th>
-                <th className="py-2 px-space-sm">Time (UTC)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-surface-container/30">
-              {filteredActivity.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="text-center py-8 text-on-surface-variant font-mono text-xs">
-                    {isMissingTradeHistory
-                      ? 'No trade activity available (Missing Trade History statement).'
-                      : activityPeriod !== 'ALL' && instrumentActivities.length > 0
-                      ? `No matching trades in ${activityPeriod === 'QUARTER' ? quarterLabel : 'the current year'} — try a wider period.`
-                      : 'No activity matches the current filter.'}
-                  </td>
-                </tr>
-              ) : (
-                filteredActivity.map((act, idx) => (
-                  <tr key={idx} className="hover:bg-surface-container-high/40">
-                    <td className="py-2 px-space-sm">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          act.activity === 'BUY'
-                            ? 'bg-primary/10 text-primary border border-primary/20'
-                            : 'bg-error/10 text-error border border-error/20'
-                        }`}
-                      >
-                        {act.activity}
-                      </span>
-                    </td>
-                    <td className="py-2 px-space-sm text-on-surface font-medium">
-                      {act.market}
-                      {activityTicker(act) && (
-                        <span className="ml-1.5 text-[10px] text-primary">{activityTicker(act)}</span>
-                      )}
-                    </td>
-                    <td className="py-2 px-space-sm text-right text-on-surface">
-                      {act.qty}
-                    </td>
-                    <td className="py-2 px-space-sm text-right text-on-surface-variant">
-                      {act.fill}
-                    </td>
-                    <td className="py-2 px-space-sm text-right font-semibold text-on-surface">
-                      {act.value}
-                    </td>
-                    <td className="py-2 px-space-sm text-outline">
-                      {act.date}
-                    </td>
-                    <td className="py-2 px-space-sm text-outline">
-                      {act.time}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
 
         {/* Currency & Sector Allocation (4 Cols) */}
         <div className="xl:col-span-4 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm flex flex-col justify-between">
@@ -1147,6 +611,314 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
             <span>RISK HEDGE: 0% SYNTHETIC</span>
             <span className="text-primary">NO LIQUIDITY LOCK</span>
           </div>
+        </div>
+      </div>
+
+      {/* ─────────────────────────────────────────────────────────────
+          MIDDLE SECTION 2: Single Instrument Inspector (Interactive)
+      ───────────────────────────────────────────────────────────── */}
+      <div className="bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm">
+        {!selectedHolding ? (
+          <div className="py-12 px-4 flex flex-col items-center justify-center text-center">
+            <span className="material-symbols-outlined text-3xl text-outline mb-2">query_stats</span>
+            <span className="font-headline-md text-sm text-on-surface font-medium">Single Instrument Inspector</span>
+            <span className="font-body-sm text-xs text-on-surface-variant max-w-sm mt-1">
+              {isMissingTradeHistory
+                ? 'Missing Trade History: Upload Trade*.csv to view execution trajectory and holding analytics.'
+                : 'No instrument selected.'}
+            </span>
+          </div>
+        ) : (
+          <div>
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-space-sm border-b border-surface-container/40 mb-space-sm">
+              <div className="flex items-center gap-space-sm">
+                <span className="material-symbols-outlined text-[20px] text-primary">insights</span>
+                <div>
+                  <span className="font-headline-md text-headline-md text-on-surface font-semibold">
+                    Single Instrument Inspector & Execution Blotter
+                  </span>
+                  <div className="font-label-caps text-[10px] text-outline">
+                    FOCUSED INSTRUMENT: {selectedHolding.ticker} • {selectedHolding.market}
+                  </div>
+                </div>
+              </div>
+
+          {/* Instrument Dropdown Selector */}
+          <div className="flex items-center gap-space-sm">
+            <span className="font-label-caps text-label-caps text-on-surface-variant">SWITCH TICKER:</span>
+            <select
+              value={selectedTicker}
+              onChange={(e) => setSelectedTicker(e.target.value)}
+              className="px-3 py-1.5 rounded bg-surface-container-lowest border border-surface-container text-xs font-mono text-primary font-bold focus:outline-none focus:border-primary"
+            >
+              {positions.map((p) => (
+                <option key={p.ticker} value={p.ticker}>
+                  {p.ticker} — {p.market}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Quick Inspector Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-space-sm mb-space-md">
+          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
+            <span className="font-label-caps text-[10px] text-outline block">CURRENT POSITION</span>
+            <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
+              {selectedHolding.quantity.toLocaleString()} Shares
+            </span>
+          </div>
+          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
+            <span className="font-label-caps text-[10px] text-outline block">AVG EXECUTION BASIS</span>
+            <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
+              ${(selectedHolding.current_price ? selectedHolding.current_price * 0.88 : 112).toFixed(2)}
+            </span>
+          </div>
+          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
+            <span className="font-label-caps text-[10px] text-outline block">CURRENT VALUE (GBP)</span>
+            <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
+              £{selectedHolding.market_value_gbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
+            <span className="font-label-caps text-[10px] text-outline block">NET UNREALIZED P&L</span>
+            <span className={`font-data-mono-lg text-sm font-semibold ${selectedHolding.pnl_gbp >= 0 ? 'text-primary' : 'text-error'}`}>
+              {selectedHolding.pnl_gbp >= 0 ? '+' : ''}£{selectedHolding.pnl_gbp.toFixed(2)}
+            </span>
+          </div>
+        </div>
+
+        {/* Inspector Chart & Execution History */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-space-md">
+          {/* SVG Price Chart with Execution Markers (8 cols) */}
+          <div className="lg:col-span-8 bg-surface-container-lowest p-space-sm rounded-lg border border-surface-container/40">
+            <div className="flex items-center justify-between px-2 py-1 mb-2 text-xs font-mono text-outline border-b border-surface-container/20">
+              <span className="text-on-surface font-semibold">PRICE TRAJECTORY & EXECUTION FLAGS</span>
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1 text-primary">
+                  <span className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-b-[6px] border-b-primary" />
+                  BUY FILLS
+                </span>
+                <span className="flex items-center gap-1 text-tertiary">
+                  <span className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-tertiary" />
+                  SELL FILLS
+                </span>
+              </div>
+            </div>
+
+            {/* Chart SVG */}
+            <svg className="w-full h-56" viewBox="0 0 900 240">
+              <defs>
+                <linearGradient id="priceGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#4edea3" stopOpacity="0.25" />
+                  <stop offset="100%" stopColor="#4edea3" stopOpacity="0.0" />
+                </linearGradient>
+              </defs>
+              {/* Gridlines */}
+              <line x1="40" y1="40" x2="880" y2="40" stroke="#1c2028" strokeDasharray="3,3" />
+              <line x1="40" y1="100" x2="880" y2="100" stroke="#1c2028" strokeDasharray="3,3" />
+              <line x1="40" y1="160" x2="880" y2="160" stroke="#1c2028" strokeDasharray="3,3" />
+              <line x1="40" y1="210" x2="880" y2="210" stroke="#1c2028" />
+
+              {/* Area path */}
+              <path
+                d="M 40 180 Q 150 160, 240 135 T 450 120 T 650 75 T 880 50 L 880 210 L 40 210 Z"
+                fill="url(#priceGradient)"
+              />
+              {/* Line vector */}
+              <path
+                d="M 40 180 Q 150 160, 240 135 T 450 120 T 650 75 T 880 50"
+                fill="none"
+                stroke="#4edea3"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              />
+
+              {/* BUY Marker 1 */}
+              <circle cx="240" cy="135" r="5" fill="#4edea3" />
+              <polygon points="240,118 235,128 245,128" fill="#4edea3" />
+              <text x="240" y="112" fill="#4edea3" fontSize="10" textAnchor="middle" fontFamily="monospace">
+                BUY +40
+              </text>
+
+              {/* BUY Marker 2 */}
+              <circle cx="530" cy="98" r="5" fill="#4edea3" />
+              <polygon points="530,81 525,91 535,91" fill="#4edea3" />
+              <text x="530" y="75" fill="#4edea3" fontSize="10" textAnchor="middle" fontFamily="monospace">
+                BUY +25
+              </text>
+
+              {/* SELL Marker */}
+              <circle cx="700" cy="68" r="5" fill="#ffb4ab" />
+              <polygon points="700,85 695,75 705,75" fill="#ffb4ab" />
+              <text x="700" y="98" fill="#ffb4ab" fontSize="10" textAnchor="middle" fontFamily="monospace">
+                SELL -15
+              </text>
+            </svg>
+          </div>
+
+          {/* Single Instrument Trade Fills (4 cols) */}
+          <div className="lg:col-span-4 bg-surface-container-lowest p-space-sm rounded-lg border border-surface-container/40 flex flex-col justify-between">
+            <div>
+              <span className="font-label-caps text-label-caps text-outline block mb-2 uppercase">
+                {selectedHolding.ticker} Execution Audit
+              </span>
+              <div className="space-y-2">
+                <div className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono">
+                  <div>
+                    <span className="text-primary font-bold">BUY 40 shs</span>
+                    <span className="text-outline block text-[10px]">2026-09-15 14:10</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-on-surface font-semibold">$118.40</span>
+                    <span className="text-outline block text-[10px]">Settled: £3,660.10</span>
+                  </div>
+                </div>
+
+                <div className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono">
+                  <div>
+                    <span className="text-primary font-bold">BUY 25 shs</span>
+                    <span className="text-outline block text-[10px]">2026-08-02 16:35</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-on-surface font-semibold">$122.10</span>
+                    <span className="text-outline block text-[10px]">Settled: £2,402.15</span>
+                  </div>
+                </div>
+
+                <div className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono">
+                  <div>
+                    <span className="text-tertiary font-bold">SELL 15 shs</span>
+                    <span className="text-outline block text-[10px]">2026-07-11 15:02</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-on-surface font-semibold">$129.80</span>
+                    <span className="text-outline block text-[10px]">Proceeds: £1,520.40</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 mt-2 border-t border-surface-container/30 flex items-center justify-between text-[11px] font-mono text-outline">
+              <span>BROKER: IG BROKERAGE</span>
+              <span className="text-secondary">ACCOUNT #QX2B3</span>
+            </div>
+          </div>
+        </div>
+      </div>
+        )}
+      </div>
+
+      {/* ─────────────────────────────────────────────────────────────
+          MIDDLE SECTION 3: Trade History This Quarter
+      ───────────────────────────────────────────────────────────── */}
+      <div className="bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-sm mb-space-sm border-b border-surface-container/40">
+          <div className="flex items-center gap-space-sm">
+            <span className="material-symbols-outlined text-[18px] text-secondary">history</span>
+            <span className="font-headline-md text-headline-md text-on-surface font-semibold">
+              Trade Activity Ledger (Recent Quarters)
+            </span>
+          </div>
+
+          {/* Filter Pills */}
+          <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
+            <button
+              type="button"
+              onClick={() => setActivityFilter('ALL')}
+              className={`px-2.5 py-1 rounded transition-colors ${
+                activityFilter === 'ALL'
+                  ? 'bg-surface-container-high text-primary font-bold'
+                  : 'text-outline hover:text-on-surface'
+              }`}
+            >
+              ALL ({tradeActivities.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActivityFilter('BUYS')}
+              className={`px-2.5 py-1 rounded transition-colors ${
+                activityFilter === 'BUYS'
+                  ? 'bg-surface-container-high text-primary font-bold'
+                  : 'text-outline hover:text-on-surface'
+              }`}
+            >
+              BUYS ({tradeActivities.filter((a) => a.activity === 'BUY').length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActivityFilter('SELLS')}
+              className={`px-2.5 py-1 rounded transition-colors ${
+                activityFilter === 'SELLS'
+                  ? 'bg-surface-container-high text-tertiary font-bold'
+                  : 'text-outline hover:text-on-surface'
+              }`}
+            >
+              SELLS ({tradeActivities.filter((a) => a.activity === 'SELL').length})
+            </button>
+          </div>
+        </div>
+
+        {/* Activity Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left font-data-mono-sm text-data-mono-sm border-collapse">
+            <thead>
+              <tr className="border-b border-surface-container text-outline uppercase font-label-caps text-[10px]">
+                <th className="py-2 px-space-sm">Activity</th>
+                <th className="py-2 px-space-sm">Market Instrument</th>
+                <th className="py-2 px-space-sm text-right">Qty</th>
+                <th className="py-2 px-space-sm text-right">Fill Price</th>
+                <th className="py-2 px-space-sm text-right">Settled Value (GBP)</th>
+                <th className="py-2 px-space-sm">Date</th>
+                <th className="py-2 px-space-sm">Time (UTC)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-surface-container/30">
+              {filteredActivity.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="text-center py-8 text-on-surface-variant font-mono text-xs">
+                    {isMissingTradeHistory
+                      ? 'No trade activity available (Missing Trade History statement).'
+                      : 'No activity matches the current filter.'}
+                  </td>
+                </tr>
+              ) : (
+                filteredActivity.map((act, idx) => (
+                  <tr key={idx} className="hover:bg-surface-container-high/40">
+                    <td className="py-2 px-space-sm">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          act.activity === 'BUY'
+                            ? 'bg-primary/10 text-primary border border-primary/20'
+                            : 'bg-error/10 text-error border border-error/20'
+                        }`}
+                      >
+                        {act.activity}
+                      </span>
+                    </td>
+                    <td className="py-2 px-space-sm text-on-surface font-medium">
+                      {act.market}
+                    </td>
+                    <td className="py-2 px-space-sm text-right text-on-surface">
+                      {act.qty}
+                    </td>
+                    <td className="py-2 px-space-sm text-right text-on-surface-variant">
+                      {act.fill}
+                    </td>
+                    <td className="py-2 px-space-sm text-right font-semibold text-on-surface">
+                      {act.value}
+                    </td>
+                    <td className="py-2 px-space-sm text-outline">
+                      {act.date}
+                    </td>
+                    <td className="py-2 px-space-sm text-outline">
+                      {act.time}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
