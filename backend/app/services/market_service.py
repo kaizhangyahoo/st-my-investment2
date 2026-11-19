@@ -40,12 +40,21 @@ def get_historical_fx(start_date: str) -> Tuple[Dict[str, pd.Series], bool]:
         return fx_data, True
     return fx_data, False
 
-def get_ohlc(ticker: str, start_date: str) -> pd.DataFrame:
+@ttl_cache(ttl=3600)
+def _fetch_ohlc(ticker: str, start_date: str) -> Optional[pd.DataFrame]:
+    """Returns None on a provider failure, which `ttl_cache` reads as a miss and so does not
+    serve. That keeps a transient 429 from pinning an empty chart for the whole hour, while a
+    successful-but-empty answer (delisted ticker) still caches."""
     try:
         return fetch_yahoo_history(ticker, start_date)
     except _FETCH_ERRORS as e:
         print(f"Error fetching OHLC for {ticker}: {e}")
-        return pd.DataFrame(columns=['Date', 'close'])
+        return None
+
+
+def get_ohlc(ticker: str, start_date: str) -> pd.DataFrame:
+    df = _fetch_ohlc(ticker, start_date)
+    return pd.DataFrame(columns=['Date', 'close']) if df is None else df
 
 @ttl_cache(ttl=3600)
 def get_price_history(ticker: str, start_date: str) -> Tuple[pd.DataFrame, Optional[str]]:

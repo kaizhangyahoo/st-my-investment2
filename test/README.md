@@ -72,6 +72,8 @@ fan-out width) rather than wall-clock, so it stays deterministic on a loaded mac
 | `functionalTest/test_price_fallback_chain.py` | provider ordering: Yahoo first, paid providers only as top-up |
 | `functionalTest/test_portfolio_data_quality.py` | the engine populates `degraded` / `fx_fallback` / `unpriced_tickers` |
 | `functionalTest/test_unresolved_symbol_gate.py` | the KAN-12 gate: upload → skip/confirm → totals |
+| `functionalTest/test_portfolio_history_endpoint.py` | KAN-19 — `GET /portfolio/history` computes from the upload instead of replaying the Streamlit file |
+| `functionalTest/test_ohlc_endpoint_contract.py` | KAN-37/KAN-35 — `GET /market-data/ohlc/{ticker}` shape, NaN handling, and `get_ohlc` caching |
 | `nonFunctionalTest/test_cold_load_performance.py` | KAN-18 latency guards — no blocking sleep, bounded fan-out, timeouts set |
 | `nonFunctionalTest/test_provider_resilience.py` | EODHD quota exhaustion and FX fallback announce themselves |
 
@@ -108,6 +110,16 @@ effect**, so `save_ticker_mappings()` can never touch the repo's
 `company_name_to_ticker.json`. The assertion matters: a silently-ignored `setattr` would
 mean the test rewrites a tracked file. Override `MAPPINGS` to set the starting state.
 
+## HTTP-level endpoint tests
+
+`fastapi.testclient.TestClient` **does** work here, behind a `try/except ImportError` +
+`@unittest.skipIf` guard so the suite still collects if `httpx` goes missing. Reach for it
+when the assertion is about the HTTP response itself — a status code, or JSON serialisation,
+where calling the handler directly returns a dict and would pass even on a payload that
+cannot be encoded. `get_current_user` falls back to an anonymous dev user, so no token is
+needed. Calling the handler directly is still fine, and cheaper, when the assertion is
+about the returned value rather than the response.
+
 ## Not here
 
 **Browser E2E** lives at `.agent/skills/playwright_testing/examples/`, run with
@@ -115,10 +127,5 @@ mean the test rewrites a tracked file. Override `MAPPINGS` to set the starting s
 `SKILL.md` references those paths, `test_login.py` does a sibling-relative
 `from scripts.auth_helper import AuthHelper`, and the examples target the **legacy
 Streamlit app on :8501** — not the FastAPI backend these suites cover.
-
-**HTTP-level endpoint tests** are absent because `fastapi.testclient.TestClient` is
-unusable here: starlette 1.10.0 requires `httpx2`, which is not installed, and plain
-`httpx` does not satisfy it. Call endpoint functions directly instead — they are plain
-`def`, and `get_current_user` has an anonymous dev fallback, so auth does not block it.
 
 **Frontend tests** — there are none; `frontend/` has no test runner configured.
