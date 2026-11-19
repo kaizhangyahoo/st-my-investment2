@@ -9,4 +9,4 @@ This directory contains legacy/unused scripts and alternate variants that are no
 - `scrape_news_playwright.py`: Standalone news scraping prototype using Playwright.
 - `scrape_news_requests.py`: Standalone news scraping prototype using Requests.
 
-> **Note:** Imports within these files are intentionally preserved in their legacy state for historical reference.
+> **Note:** Imports for modules that moved to `shared_service/` have been updated to their new paths. Other imports are preserved in their legacy state. Run from the repo root: `streamlit run archive/rewrite_tab_4pi.py`.
