@@ -122,20 +122,20 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   const totalValue = isMissingTradeHistory
     ? 0
     : hasLivePositions
-    ? summary.total_market_value_gbp
-    : positions.reduce((acc, p) => acc + p.market_value_gbp, 0);
+      ? summary.total_market_value_gbp
+      : positions.reduce((acc, p) => acc + p.market_value_gbp, 0);
 
   const totalCost = isMissingTradeHistory
     ? 0
     : hasLivePositions
-    ? summary.total_invested_cash
-    : totalValue - positions.reduce((acc, p) => acc + p.pnl_gbp, 0);
+      ? summary.total_invested_cash
+      : totalValue - positions.reduce((acc, p) => acc + p.pnl_gbp, 0);
 
   const totalPnl = isMissingTradeHistory
     ? 0
     : hasLivePositions
-    ? summary.total_pnl_gbp
-    : positions.reduce((acc, p) => acc + p.pnl_gbp, 0);
+      ? summary.total_pnl_gbp
+      : positions.reduce((acc, p) => acc + p.pnl_gbp, 0);
 
   const pnlPercent = totalCost > 0 ? ((totalPnl / totalCost) * 100).toFixed(1) : '0.0';
 
@@ -150,8 +150,8 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   const tradeActivities = isMissingTradeHistory
     ? []
     : summary && summary.trade_activities && summary.trade_activities.length > 0
-    ? summary.trade_activities
-    : SAMPLE_TRADE_ACTIVITY;
+      ? summary.trade_activities
+      : SAMPLE_TRADE_ACTIVITY;
 
   // Positions carry tickers for currently-held instruments; use them when an activity row has none.
   const tickerByMarket = new Map(positions.map((p) => [p.market, p.ticker]));
@@ -241,8 +241,8 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   // Every ledger trade for the inspected instrument, across all IG session variants.
   const inspectorTrades = selectedHolding
     ? tradeActivities
-        .filter((a) => instrumentKeyOf(a) === selectedHolding.ticker || baseNameOf(a.market) === baseNameOf(selectedHolding.market))
-        .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time))
+      .filter((a) => instrumentKeyOf(a) === selectedHolding.ticker || baseNameOf(a.market) === baseNameOf(selectedHolding.market))
+      .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time))
     : [];
   const inspectorTradesKey = inspectorTrades.map((t) => `${t.date}|${t.activity}|${t.qty}|${t.fill}`).join(';');
 
@@ -294,10 +294,10 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   // Class names are literals, not interpolated: Tailwind only emits classes it can see in source.
   const currencySlices = hasAllocation
     ? [
-        { code: 'USD', label: 'US Dollar (USD)', gbp: allocation!.usd_gbp, text: 'text-primary', dot: 'bg-primary' },
-        { code: 'GBP', label: 'British Pound (GBP)', gbp: allocation!.gbp, text: 'text-secondary', dot: 'bg-secondary' },
-        { code: 'EUR', label: 'Euro (EUR)', gbp: allocation!.eur_gbp, text: 'text-tertiary-fixed', dot: 'bg-tertiary-fixed' },
-      ].filter((s) => s.gbp !== 0)
+      { code: 'USD', label: 'US Dollar (USD)', gbp: allocation!.usd_gbp, text: 'text-primary', dot: 'bg-primary' },
+      { code: 'GBP', label: 'British Pound (GBP)', gbp: allocation!.gbp, text: 'text-secondary', dot: 'bg-secondary' },
+      { code: 'EUR', label: 'Euro (EUR)', gbp: allocation!.eur_gbp, text: 'text-tertiary-fixed', dot: 'bg-tertiary-fixed' },
+    ].filter((s) => s.gbp !== 0)
     : [];
   // The engine buckets by the statement's Currency column but converts by ticker suffix, so a
   // holding in any other currency lands outside all three buckets. Show that gap, don't bury it.
@@ -332,11 +332,10 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
             {/* Dropzone Area */}
             <div
               {...getRootProps()}
-              className={`border border-dashed rounded-lg p-space-md flex flex-col items-center justify-center text-center cursor-pointer transition-colors ${
-                isDragActive
+              className={`border border-dashed rounded-lg p-space-md flex flex-col items-center justify-center text-center cursor-pointer transition-colors ${isDragActive
                   ? 'border-primary bg-primary-container/10'
                   : 'border-outline-variant/60 hover:border-primary/60 bg-surface-container-lowest'
-              }`}
+                }`}
             >
               <input {...getInputProps()} />
               <div className="w-9 h-9 rounded-full bg-surface-container-high flex items-center justify-center text-primary mb-2 shadow-inner">
@@ -385,9 +384,8 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5 truncate max-w-[240px]">
                 <span
-                  className={`material-symbols-outlined text-[15px] ${
-                    feed.state === 'loading' ? 'text-amber-400 animate-spin' : 'text-secondary'
-                  }`}
+                  className={`material-symbols-outlined text-[15px] ${feed.state === 'loading' ? 'text-amber-400 animate-spin' : 'text-secondary'
+                    }`}
                 >
                   {feed.state === 'loading' ? 'sync' : 'description'}
                 </span>
@@ -650,9 +648,8 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                       <tr
                         key={p.ticker + idx}
                         onClick={() => setSelectedTicker(p.ticker)}
-                        className={`hover:bg-surface-container-high/60 cursor-pointer transition-colors ${
-                          isSelected ? 'bg-surface-container-high/90 shadow-[inset_2px_0_0_0_#4edea3]' : ''
-                        }`}
+                        className={`hover:bg-surface-container-high/60 cursor-pointer transition-colors ${isSelected ? 'bg-surface-container-high/90 shadow-[inset_2px_0_0_0_#4edea3]' : ''
+                          }`}
                       >
                         <td className="py-2.5 px-space-sm font-semibold text-primary">
                           {p.ticker}
@@ -672,11 +669,10 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                         </td>
                         <td className="py-2.5 px-space-sm text-right">
                           <span
-                            className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${
-                              isPositive
+                            className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${isPositive
                                 ? 'bg-primary/10 text-primary border border-primary/20'
                                 : 'bg-error/10 text-error border border-error/20'
-                            }`}
+                              }`}
                           >
                             {isPositive ? '+' : ''}£{p.pnl_gbp.toFixed(2)}
                           </span>
@@ -746,356 +742,351 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                 </div>
               </div>
 
-          {/* Instrument Dropdown Selector */}
-          <div className="flex items-center gap-space-sm">
-            <span className="font-label-caps text-label-caps text-on-surface-variant">SWITCH TICKER:</span>
-            <select
-              value={selectedHolding.ticker}
-              onChange={(e) => setSelectedTicker(e.target.value)}
-              className="px-3 py-1.5 rounded bg-surface-container-lowest border border-surface-container text-xs font-mono text-primary font-bold focus:outline-none focus:border-primary"
-            >
-              {positions.map((p) => (
-                <option key={p.ticker} value={p.ticker}>
-                  {p.ticker} — {p.market}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+              {/* Instrument Dropdown Selector */}
+              <div className="flex items-center gap-space-sm">
+                <span className="font-label-caps text-label-caps text-on-surface-variant">SWITCH TICKER:</span>
+                <select
+                  value={selectedHolding.ticker}
+                  onChange={(e) => setSelectedTicker(e.target.value)}
+                  className="px-3 py-1.5 rounded bg-surface-container-lowest border border-surface-container text-xs font-mono text-primary font-bold focus:outline-none focus:border-primary"
+                >
+                  {positions.map((p) => (
+                    <option key={p.ticker} value={p.ticker}>
+                      {p.ticker} — {p.market}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
-        {/* Quick Inspector Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-space-sm mb-space-md">
-          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
-            <span className="font-label-caps text-[10px] text-outline block">CURRENT POSITION</span>
-            <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
-              {selectedHolding.quantity.toLocaleString()} Shares
-            </span>
-          </div>
-          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
-            <span className="font-label-caps text-[10px] text-outline block">
-              AVG EXECUTION BASIS {avgExecutionBasis && '(GBP/SHARE)'}
-            </span>
-            <span
-              className={`font-data-mono-lg text-sm font-semibold ${avgExecutionBasis ? 'text-on-surface' : 'text-outline'}`}
-              title={
-                avgExecutionBasis
-                  ? 'Total settled value of recorded buys divided by the quantity bought'
-                  : 'No data source: no settled buy values recorded for this instrument'
-              }
-            >
-              {avgExecutionBasis ?? '—'}
-            </span>
-          </div>
-          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
-            <span className="font-label-caps text-[10px] text-outline block">CURRENT VALUE (GBP)</span>
-            <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
-              £{selectedHolding.market_value_gbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
-          </div>
-          <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
-            <span className="font-label-caps text-[10px] text-outline block">NET UNREALIZED P&L</span>
-            <span className={`font-data-mono-lg text-sm font-semibold ${selectedHolding.pnl_gbp >= 0 ? 'text-primary' : 'text-error'}`}>
-              {selectedHolding.pnl_gbp >= 0 ? '+' : ''}£{selectedHolding.pnl_gbp.toFixed(2)}
-            </span>
-          </div>
-        </div>
-
-        {/* Inspector Chart & Execution History */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-space-md">
-          {/* SVG Price Chart with Execution Markers (8 cols) */}
-          <div className="lg:col-span-8 bg-surface-container-lowest p-space-sm rounded-lg border border-surface-container/40">
-            <div className="flex items-center justify-between px-2 py-1 mb-2 text-xs font-mono text-outline border-b border-surface-container/20">
-              <span className="text-on-surface font-semibold">PRICE TRAJECTORY & EXECUTION FLAGS</span>
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1 text-primary">
-                  <span className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-b-[6px] border-b-primary" />
-                  BUY FILLS
+            {/* Quick Inspector Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-space-sm mb-space-md">
+              <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
+                <span className="font-label-caps text-[10px] text-outline block">CURRENT POSITION</span>
+                <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
+                  {selectedHolding.quantity.toLocaleString()} Shares
                 </span>
-                <span className="flex items-center gap-1 text-tertiary">
-                  <span className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-tertiary" />
-                  SELL FILLS
+              </div>
+              <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
+                <span className="font-label-caps text-[10px] text-outline block">
+                  AVG EXECUTION BASIS {avgExecutionBasis && '(GBP/SHARE)'}
+                </span>
+                <span
+                  className={`font-data-mono-lg text-sm font-semibold ${avgExecutionBasis ? 'text-on-surface' : 'text-outline'}`}
+                  title={
+                    avgExecutionBasis
+                      ? 'Total settled value of recorded buys divided by the quantity bought'
+                      : 'No data source: no settled buy values recorded for this instrument'
+                  }
+                >
+                  {avgExecutionBasis ?? '—'}
+                </span>
+              </div>
+              <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
+                <span className="font-label-caps text-[10px] text-outline block">CURRENT VALUE (GBP)</span>
+                <span className="font-data-mono-lg text-sm text-on-surface font-semibold">
+                  £{selectedHolding.market_value_gbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="p-2.5 rounded bg-surface-container-lowest border border-surface-container/40">
+                <span className="font-label-caps text-[10px] text-outline block">NET UNREALIZED P&L</span>
+                <span className={`font-data-mono-lg text-sm font-semibold ${selectedHolding.pnl_gbp >= 0 ? 'text-primary' : 'text-error'}`}>
+                  {selectedHolding.pnl_gbp >= 0 ? '+' : ''}£{selectedHolding.pnl_gbp.toFixed(2)}
                 </span>
               </div>
             </div>
 
-            <PriceTradeChart ticker={selectedHolding.ticker} trades={chartTrades} />
-          </div>
-
-          {/* Single Instrument Trade Fills (4 cols) */}
-          <div className="lg:col-span-4 bg-surface-container-lowest p-space-sm rounded-lg border border-surface-container/40 flex flex-col justify-between">
-            <div>
-              <span className="font-label-caps text-label-caps text-outline block mb-2 uppercase">
-                {selectedHolding.ticker} Execution Audit
-              </span>
-              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                {inspectorTrades.length === 0 ? (
-                  <div className="p-3 text-center text-outline font-mono text-xs">
-                    No executions recorded for this instrument.
+            {/* Inspector Chart & Execution History */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-space-md">
+              {/* SVG Price Chart with Execution Markers (8 cols) */}
+              <div className="lg:col-span-8 bg-surface-container-lowest p-space-sm rounded-lg border border-surface-container/40">
+                <div className="flex items-center justify-between px-2 py-1 mb-2 text-xs font-mono text-outline border-b border-surface-container/20">
+                  <span className="text-on-surface font-semibold">PRICE TRAJECTORY & EXECUTION FLAGS</span>
+                  <div className="flex items-center gap-3">
+                    <span className="flex items-center gap-1 text-primary">
+                      <span className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-b-[6px] border-b-primary" />
+                      BUY FILLS
+                    </span>
+                    <span className="flex items-center gap-1 text-tertiary">
+                      <span className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-tertiary" />
+                      SELL FILLS
+                    </span>
                   </div>
-                ) : (
-                  inspectorTrades.map((t, i) => {
-                    const isBuy = t.activity !== 'SELL';
-                    return (
-                      <div
-                        key={`${t.date}-${t.time}-${i}`}
-                        className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono"
-                      >
-                        <div>
-                          <span className={`${isBuy ? 'text-primary' : 'text-tertiary'} font-bold`}>
-                            {isBuy ? 'BUY' : 'SELL'} {t.qty.toLocaleString()} shs
-                          </span>
-                          <span className="text-outline block text-[10px]">
-                            {t.date} {t.time}
-                          </span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-on-surface font-semibold">{t.fill}</span>
-                          {t.value && (
-                            <span className="text-outline block text-[10px]">
-                              {isBuy ? 'Settled' : 'Proceeds'}: {t.value}
-                            </span>
-                          )}
-                        </div>
+                </div>
+
+                <PriceTradeChart ticker={selectedHolding.ticker} trades={chartTrades} />
+              </div>
+
+              {/* Single Instrument Trade Fills (4 cols) */}
+              <div className="lg:col-span-4 bg-surface-container-lowest p-space-sm rounded-lg border border-surface-container/40 flex flex-col justify-between">
+                <div>
+                  <span className="font-label-caps text-label-caps text-outline block mb-2 uppercase">
+                    {selectedHolding.ticker} Execution Audit
+                  </span>
+                  <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                    {inspectorTrades.length === 0 ? (
+                      <div className="p-3 text-center text-outline font-mono text-xs">
+                        No executions recorded for this instrument.
                       </div>
-                    );
-                  })
-                )}
+                    ) : (
+                      inspectorTrades.map((t, i) => {
+                        const isBuy = t.activity !== 'SELL';
+                        return (
+                          <div
+                            key={`${t.date}-${t.time}-${i}`}
+                            className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono"
+                          >
+                            <div>
+                              <span className={`${isBuy ? 'text-primary' : 'text-tertiary'} font-bold`}>
+                                {isBuy ? 'BUY' : 'SELL'} {t.qty.toLocaleString()} shs
+                              </span>
+                              <span className="text-outline block text-[10px]">
+                                {t.date} {t.time}
+                              </span>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-on-surface font-semibold">{t.fill}</span>
+                              {t.value && (
+                                <span className="text-outline block text-[10px]">
+                                  {isBuy ? 'Settled' : 'Proceeds'}: {t.value}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-2 mt-2 border-t border-surface-container/30 flex items-center justify-between text-[11px] font-mono text-outline">
+                  <span>BROKER: IG BROKERAGE</span>
+                  <span className="text-secondary">{inspectorTrades.length} EXECUTIONS</span>
+                </div>
               </div>
             </div>
-
-            <div className="pt-2 mt-2 border-t border-surface-container/30 flex items-center justify-between text-[11px] font-mono text-outline">
-              <span>BROKER: IG BROKERAGE</span>
-              <span className="text-secondary">{inspectorTrades.length} EXECUTIONS</span>
-            </div>
-          </div>
-        </div>
           </div>
         </div>
       )}
 
       {/* ─────────────────────────────────────────────────────────────
-          MIDDLE SECTION 3: Trade Activities & Currency/Asset Allocation
+          MIDDLE SECTION 3: Trade Activities & Currency Allocation
       ───────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-space-lg">
-      {/* Trade Activities (8 Cols) */}
-      <div className="xl:col-span-8 min-w-0 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-sm mb-space-sm border-b border-surface-container/40">
-          <div className="flex items-center gap-space-sm">
-            <span className="material-symbols-outlined text-[18px] text-secondary">history</span>
-            <span className="font-headline-md text-headline-md text-on-surface font-semibold whitespace-nowrap">
-              Trade Activities
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-space-sm">
-            {/* Instrument filter with autocomplete */}
-            <div className="relative">
-              <span className="material-symbols-outlined absolute left-2 top-1.5 text-[15px] text-outline">
-                search
+        {/* Trade Activities (8 Cols) */}
+        <div className="xl:col-span-8 min-w-0 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-sm mb-space-sm border-b border-surface-container/40">
+            <div className="flex items-center gap-space-sm">
+              <span className="material-symbols-outlined text-[18px] text-secondary">history</span>
+              <span className="font-headline-md text-headline-md text-on-surface font-semibold whitespace-nowrap">
+                Trade Activities
               </span>
-              <input
-                type="text"
-                role="combobox"
-                aria-expanded={showInstrumentSuggestions && instrumentSuggestions.length > 0}
-                aria-autocomplete="list"
-                placeholder="Instrument, symbol or company..."
-                value={instrumentQuery}
-                onChange={(e) => {
-                  setInstrumentQuery(e.target.value);
-                  setSelectedInstrumentKey(null);
-                  setShowInstrumentSuggestions(true);
-                  setHighlightedSuggestion(-1);
-                }}
-                onFocus={() => setShowInstrumentSuggestions(true)}
-                onBlur={() => setShowInstrumentSuggestions(false)}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    setShowInstrumentSuggestions(true);
-                    setHighlightedSuggestion((i) => Math.min(i + 1, instrumentSuggestions.length - 1));
-                  } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    setHighlightedSuggestion((i) => Math.max(i - 1, 0));
-                  } else if (e.key === 'Enter' && showInstrumentSuggestions && highlightedSuggestion >= 0) {
-                    e.preventDefault();
-                    selectInstrument(instrumentSuggestions[highlightedSuggestion]);
-                  } else if (e.key === 'Escape') {
-                    setShowInstrumentSuggestions(false);
-                  }
-                }}
-                className="pl-7 pr-7 py-1 rounded bg-surface-container-lowest border border-surface-container text-xs font-mono text-on-surface focus:outline-none focus:border-primary w-60"
-              />
-              {instrumentQuery && (
-                <button
-                  type="button"
-                  onClick={() => selectInstrument(null)}
-                  title="Clear instrument filter"
-                  className="absolute right-1.5 top-1 p-0.5 rounded text-outline hover:text-on-surface"
-                >
-                  <span className="material-symbols-outlined text-[14px]">close</span>
-                </button>
-              )}
-              {showInstrumentSuggestions && instrumentSuggestions.length > 0 && (
-                <ul
-                  role="listbox"
-                  className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded border border-surface-container-high bg-surface-container-lowest shadow-lg text-xs font-mono"
-                >
-                  {instrumentSuggestions.map((o, i) => (
-                    <li
-                      key={o.key}
-                      role="option"
-                      aria-selected={i === highlightedSuggestion}
-                      title={o.variants.join('\n')}
-                      // mousedown fires before the input's blur, so the click isn't lost
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        selectInstrument(o);
-                      }}
-                      onMouseEnter={() => setHighlightedSuggestion(i)}
-                      className={`px-2 py-1.5 cursor-pointer flex items-center justify-between gap-2 ${
-                        i === highlightedSuggestion ? 'bg-surface-container-high' : ''
-                      }`}
-                    >
-                      <span className="text-on-surface truncate">
-                        {o.label}
-                        {o.variants.length > 1 && (
-                          <span className="ml-1 text-[10px] text-outline">×{o.variants.length} sessions</span>
-                        )}
-                      </span>
-                      {o.ticker && <span className="text-primary font-semibold shrink-0">{o.ticker}</span>}
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
 
-            {/* Period Pills */}
-            <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
-              {(
-                [
-                  ['QUARTER', quarterLabel],
-                  ['YEAR', 'CURRENT YEAR'],
-                  ['ALL', 'ALL'],
-                ] as [ActivityPeriod, string][]
-              ).map(([period, label]) => (
+            <div className="flex flex-wrap items-center gap-space-sm">
+              {/* Instrument filter with autocomplete */}
+              <div className="relative">
+                <span className="material-symbols-outlined absolute left-2 top-1.5 text-[15px] text-outline">
+                  search
+                </span>
+                <input
+                  type="text"
+                  role="combobox"
+                  aria-expanded={showInstrumentSuggestions && instrumentSuggestions.length > 0}
+                  aria-autocomplete="list"
+                  placeholder="Instrument, symbol or company..."
+                  value={instrumentQuery}
+                  onChange={(e) => {
+                    setInstrumentQuery(e.target.value);
+                    setSelectedInstrumentKey(null);
+                    setShowInstrumentSuggestions(true);
+                    setHighlightedSuggestion(-1);
+                  }}
+                  onFocus={() => setShowInstrumentSuggestions(true)}
+                  onBlur={() => setShowInstrumentSuggestions(false)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setShowInstrumentSuggestions(true);
+                      setHighlightedSuggestion((i) => Math.min(i + 1, instrumentSuggestions.length - 1));
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setHighlightedSuggestion((i) => Math.max(i - 1, 0));
+                    } else if (e.key === 'Enter' && showInstrumentSuggestions && highlightedSuggestion >= 0) {
+                      e.preventDefault();
+                      selectInstrument(instrumentSuggestions[highlightedSuggestion]);
+                    } else if (e.key === 'Escape') {
+                      setShowInstrumentSuggestions(false);
+                    }
+                  }}
+                  className="pl-7 pr-7 py-1 rounded bg-surface-container-lowest border border-surface-container text-xs font-mono text-on-surface focus:outline-none focus:border-primary w-60"
+                />
+                {instrumentQuery && (
+                  <button
+                    type="button"
+                    onClick={() => selectInstrument(null)}
+                    title="Clear instrument filter"
+                    className="absolute right-1.5 top-1 p-0.5 rounded text-outline hover:text-on-surface"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">close</span>
+                  </button>
+                )}
+                {showInstrumentSuggestions && instrumentSuggestions.length > 0 && (
+                  <ul
+                    role="listbox"
+                    className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded border border-surface-container-high bg-surface-container-lowest shadow-lg text-xs font-mono"
+                  >
+                    {instrumentSuggestions.map((o, i) => (
+                      <li
+                        key={o.key}
+                        role="option"
+                        aria-selected={i === highlightedSuggestion}
+                        title={o.variants.join('\n')}
+                        // mousedown fires before the input's blur, so the click isn't lost
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          selectInstrument(o);
+                        }}
+                        onMouseEnter={() => setHighlightedSuggestion(i)}
+                        className={`px-2 py-1.5 cursor-pointer flex items-center justify-between gap-2 ${i === highlightedSuggestion ? 'bg-surface-container-high' : ''
+                          }`}
+                      >
+                        <span className="text-on-surface truncate">
+                          {o.label}
+                          {o.variants.length > 1 && (
+                            <span className="ml-1 text-[10px] text-outline">×{o.variants.length} sessions</span>
+                          )}
+                        </span>
+                        {o.ticker && <span className="text-primary font-semibold shrink-0">{o.ticker}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Period Pills */}
+              <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
+                {(
+                  [
+                    ['QUARTER', quarterLabel],
+                    ['YEAR', 'CURRENT YEAR'],
+                    ['ALL', 'ALL'],
+                  ] as [ActivityPeriod, string][]
+                ).map(([period, label]) => (
+                  <button
+                    key={period}
+                    type="button"
+                    onClick={() => setActivityPeriod(period)}
+                    className={`px-2.5 py-1 rounded transition-colors ${activityPeriod === period
+                        ? 'bg-surface-container-high text-primary font-bold'
+                        : 'text-outline hover:text-on-surface'
+                      }`}
+                  >
+                    {label} ({instrumentActivities.filter((a) => inPeriod(a, period)).length})
+                  </button>
+                ))}
+              </div>
+
+              {/* Side Pills (click again to clear) */}
+              <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
                 <button
-                  key={period}
                   type="button"
-                  onClick={() => setActivityPeriod(period)}
-                  className={`px-2.5 py-1 rounded transition-colors ${
-                    activityPeriod === period
+                  onClick={() => setActivitySide((s) => (s === 'BUY' ? 'ALL' : 'BUY'))}
+                  className={`px-2.5 py-1 rounded transition-colors ${activitySide === 'BUY'
                       ? 'bg-surface-container-high text-primary font-bold'
                       : 'text-outline hover:text-on-surface'
-                  }`}
+                    }`}
                 >
-                  {label} ({instrumentActivities.filter((a) => inPeriod(a, period)).length})
+                  BUY ({periodActivities.filter((a) => a.activity === 'BUY').length})
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => setActivitySide((s) => (s === 'SELL' ? 'ALL' : 'SELL'))}
+                  className={`px-2.5 py-1 rounded transition-colors ${activitySide === 'SELL'
+                      ? 'bg-surface-container-high text-tertiary font-bold'
+                      : 'text-outline hover:text-on-surface'
+                    }`}
+                >
+                  SELL ({periodActivities.filter((a) => a.activity === 'SELL').length})
+                </button>
+              </div>
             </div>
+          </div>
 
-            {/* Side Pills (click again to clear) */}
-            <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
-              <button
-                type="button"
-                onClick={() => setActivitySide((s) => (s === 'BUY' ? 'ALL' : 'BUY'))}
-                className={`px-2.5 py-1 rounded transition-colors ${
-                  activitySide === 'BUY'
-                    ? 'bg-surface-container-high text-primary font-bold'
-                    : 'text-outline hover:text-on-surface'
-                }`}
-              >
-                BUY ({periodActivities.filter((a) => a.activity === 'BUY').length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setActivitySide((s) => (s === 'SELL' ? 'ALL' : 'SELL'))}
-                className={`px-2.5 py-1 rounded transition-colors ${
-                  activitySide === 'SELL'
-                    ? 'bg-surface-container-high text-tertiary font-bold'
-                    : 'text-outline hover:text-on-surface'
-                }`}
-              >
-                SELL ({periodActivities.filter((a) => a.activity === 'SELL').length})
-              </button>
-            </div>
+          {/* Activity Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left font-data-mono-sm text-data-mono-sm border-collapse">
+              <thead>
+                <tr className="border-b border-surface-container text-outline uppercase font-label-caps text-[10px]">
+                  <th className="py-2 px-space-sm">Activity</th>
+                  <th className="py-2 px-space-sm">Market Instrument</th>
+                  <th className="py-2 px-space-sm text-right">Qty</th>
+                  <th className="py-2 px-space-sm text-right">Fill Price</th>
+                  <th className="py-2 px-space-sm text-right">Settled Value (GBP)</th>
+                  <th className="py-2 px-space-sm">Date</th>
+                  <th className="py-2 px-space-sm">Time (UTC)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-container/30">
+                {filteredActivity.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="text-center py-8 text-on-surface-variant font-mono text-xs">
+                      {isMissingTradeHistory
+                        ? 'No trade activity available (Missing Trade History statement).'
+                        : activityPeriod !== 'ALL' && instrumentActivities.length > 0
+                          ? `No matching trades in ${activityPeriod === 'QUARTER' ? quarterLabel : 'the current year'} — try a wider period.`
+                          : 'No activity matches the current filter.'}
+                    </td>
+                  </tr>
+                ) : (
+                  filteredActivity.map((act, idx) => (
+                    <tr key={idx} className="hover:bg-surface-container-high/40">
+                      <td className="py-2 px-space-sm">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${act.activity === 'BUY'
+                              ? 'bg-primary/10 text-primary border border-primary/20'
+                              : 'bg-error/10 text-error border border-error/20'
+                            }`}
+                        >
+                          {act.activity}
+                        </span>
+                      </td>
+                      <td className="py-2 px-space-sm text-on-surface font-medium">
+                        {act.market}
+                        {activityTicker(act) && (
+                          <span className="ml-1.5 text-[10px] text-primary">{activityTicker(act)}</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-space-sm text-right text-on-surface">
+                        {act.qty}
+                      </td>
+                      <td className="py-2 px-space-sm text-right text-on-surface-variant">
+                        {act.fill}
+                      </td>
+                      <td className="py-2 px-space-sm text-right font-semibold text-on-surface">
+                        {act.value}
+                      </td>
+                      <td className="py-2 px-space-sm text-outline">
+                        {act.date}
+                      </td>
+                      <td className="py-2 px-space-sm text-outline">
+                        {act.time}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        {/* Activity Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left font-data-mono-sm text-data-mono-sm border-collapse">
-            <thead>
-              <tr className="border-b border-surface-container text-outline uppercase font-label-caps text-[10px]">
-                <th className="py-2 px-space-sm">Activity</th>
-                <th className="py-2 px-space-sm">Market Instrument</th>
-                <th className="py-2 px-space-sm text-right">Qty</th>
-                <th className="py-2 px-space-sm text-right">Fill Price</th>
-                <th className="py-2 px-space-sm text-right">Settled Value (GBP)</th>
-                <th className="py-2 px-space-sm">Date</th>
-                <th className="py-2 px-space-sm">Time (UTC)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-surface-container/30">
-              {filteredActivity.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="text-center py-8 text-on-surface-variant font-mono text-xs">
-                    {isMissingTradeHistory
-                      ? 'No trade activity available (Missing Trade History statement).'
-                      : activityPeriod !== 'ALL' && instrumentActivities.length > 0
-                      ? `No matching trades in ${activityPeriod === 'QUARTER' ? quarterLabel : 'the current year'} — try a wider period.`
-                      : 'No activity matches the current filter.'}
-                  </td>
-                </tr>
-              ) : (
-                filteredActivity.map((act, idx) => (
-                  <tr key={idx} className="hover:bg-surface-container-high/40">
-                    <td className="py-2 px-space-sm">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          act.activity === 'BUY'
-                            ? 'bg-primary/10 text-primary border border-primary/20'
-                            : 'bg-error/10 text-error border border-error/20'
-                        }`}
-                      >
-                        {act.activity}
-                      </span>
-                    </td>
-                    <td className="py-2 px-space-sm text-on-surface font-medium">
-                      {act.market}
-                      {activityTicker(act) && (
-                        <span className="ml-1.5 text-[10px] text-primary">{activityTicker(act)}</span>
-                      )}
-                    </td>
-                    <td className="py-2 px-space-sm text-right text-on-surface">
-                      {act.qty}
-                    </td>
-                    <td className="py-2 px-space-sm text-right text-on-surface-variant">
-                      {act.fill}
-                    </td>
-                    <td className="py-2 px-space-sm text-right font-semibold text-on-surface">
-                      {act.value}
-                    </td>
-                    <td className="py-2 px-space-sm text-outline">
-                      {act.date}
-                    </td>
-                    <td className="py-2 px-space-sm text-outline">
-                      {act.time}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-        {/* Currency & Sector Allocation (4 Cols) */}
+        {/* Currency Allocation (4 Cols) */}
         <div className="xl:col-span-4 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between pb-space-xs mb-space-sm border-b border-surface-container/40">
               <span className="font-headline-md text-headline-md text-on-surface font-semibold flex items-center gap-1.5">
                 <span className="material-symbols-outlined text-[18px] text-secondary">donut_large</span>
-                Currency & Asset Allocation
+                Currency Allocation
               </span>
               <span className="font-label-caps text-label-caps text-outline">SPOT FX</span>
             </div>
@@ -1112,8 +1103,8 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                     {isMissingTradeHistory
                       ? 'No holdings to allocate'
                       : isShowingSamples
-                      ? 'Not calculated for sample data'
-                      : 'No priced holdings to allocate'}
+                        ? 'Not calculated for sample data'
+                        : 'No priced holdings to allocate'}
                   </span>
                 </div>
               ) : (
