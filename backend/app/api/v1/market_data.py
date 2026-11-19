@@ -19,5 +19,12 @@ def get_fx(start_date: str = "2023-01-01", user: dict = Depends(get_current_user
 @router.get("/ohlc/{ticker}")
 def get_ticker_ohlc(ticker: str, start_date: str = "2023-01-01", user: dict = Depends(get_current_user)):
     df = get_ohlc(ticker, start_date)
-    return df.to_dict(orient="records")
+    if df.empty:
+        return {"ticker": ticker, "currency": None, "points": []}
+    # Only Date/close: open/high/volume can carry NaN, which is not valid JSON.
+    points = [
+        {"date": d.strftime("%Y-%m-%d"), "close": float(c)}
+        for d, c in zip(df["Date"], df["close"])
+    ]
+    return {"ticker": ticker, "currency": df.attrs.get("currency"), "points": points}
 

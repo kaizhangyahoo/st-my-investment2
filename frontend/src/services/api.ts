@@ -43,6 +43,17 @@ export const portfolioApi = {
   reset: async () => (await api.post('/trades/reset')).data,
 };
 
+export interface OhlcResponse {
+  ticker: string;
+  currency: string | null;
+  points: { date: string; close: number }[];
+}
+
+export const marketDataApi = {
+  getOhlc: async (ticker: string, startDate: string): Promise<OhlcResponse> =>
+    (await api.get(`/market-data/ohlc/${encodeURIComponent(ticker)}`, { params: { start_date: startDate } })).data,
+};
+
 export const tickersApi = {
   getMappings: async (): Promise<Record<string, string>> => (await api.get('/tickers/mappings')).data,
   updateMappings: async (mappings: Record<string, string>) => (await api.put('/tickers/mappings', { mappings })).data,

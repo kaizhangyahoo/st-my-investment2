@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { portfolioApi } from '../../services/api';
+import { ChartTrade, PriceTradeChart } from './PriceTradeChart';
 import { FeedStatus, PortfolioSummary, Position, TradeActivityItem, UploadResult } from '../../types';
 
 interface IgAnalyticsViewProps {
@@ -57,7 +58,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedTicker, setSelectedTicker] = useState('MMM');
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>('QUARTER');
   const [activitySide, setActivitySide] = useState<ActivitySide>('ALL');
   const [instrumentQuery, setInstrumentQuery] = useState('');
@@ -235,7 +236,41 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
     (a) => activitySide === 'ALL' || a.activity === activitySide
   );
 
-  const selectedHolding = positions.find((p) => p.ticker === selectedTicker) || positions[0] || null;
+  const selectedHolding = selectedTicker ? positions.find((p) => p.ticker === selectedTicker) || null : null;
+
+  // Every ledger trade for the inspected instrument, across all IG session variants.
+  const inspectorTrades = selectedHolding
+    ? tradeActivities
+        .filter((a) => instrumentKeyOf(a) === selectedHolding.ticker || baseNameOf(a.market) === baseNameOf(selectedHolding.market))
+        .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time))
+    : [];
+  const inspectorTradesKey = inspectorTrades.map((t) => `${t.date}|${t.activity}|${t.qty}|${t.fill}`).join(';');
+  const chartTrades = useMemo<ChartTrade[]>(
+    () =>
+      inspectorTrades.map((t) => {
+        const d = parseActivityDate(t.date);
+        const price = parseFloat(t.fill.replace(/[^0-9.-]/g, ''));
+        return {
+          date: d
+            ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+            : t.date,
+          side: t.activity === 'SELL' ? 'SELL' : 'BUY',
+          qty: t.qty,
+          price: Number.isFinite(price) && price > 0 ? price : null,
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inspectorTradesKey]
+  );
+
+  useEffect(() => {
+    if (!selectedHolding) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedTicker(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedHolding]);
 
   // Every figure on this page is a placeholder when this is true, so the status bar has to say so.
   const isShowingSamples = !isMissingTradeHistory && !hasLivePositions;
@@ -494,11 +529,11 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
       </div>
 
       {/* ─────────────────────────────────────────────────────────────
-          MIDDLE SECTION 1: Holdings Matrix & Currency/Sector Donut
+          MIDDLE SECTION 1: Holdings Matrix (full width)
       ───────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-space-lg">
-        {/* Comprehensive Holdings Table (8 Cols) */}
-        <div className="xl:col-span-8 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm flex flex-col">
+      <div>
+        {/* Comprehensive Holdings Table */}
+        <div className="bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm flex flex-col">
           {/* Header & Search */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-sm mb-space-sm border-b border-surface-container/40">
             <div className="flex items-center gap-space-sm">
@@ -632,135 +667,34 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
             )}
           </div>
         </div>
-
-        {/* Currency & Sector Allocation (4 Cols) */}
-        <div className="xl:col-span-4 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-space-xs mb-space-sm border-b border-surface-container/40">
-              <span className="font-headline-md text-headline-md text-on-surface font-semibold flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[18px] text-secondary">donut_large</span>
-                Currency & Asset Allocation
-              </span>
-              <span className="font-label-caps text-label-caps text-outline">SPOT FX</span>
-            </div>
-
-            {/* SVG Donut Chart */}
-            <div className="flex items-center justify-center py-4">
-              {isMissingTradeHistory ? (
-                <div className="flex flex-col items-center justify-center h-40 text-center text-outline">
-                  <span className="material-symbols-outlined text-3xl mb-1 text-outline/50">pie_chart</span>
-                  <span className="font-mono text-xs">Awaiting Trade History</span>
-                  <span className="text-[10px] text-outline/60 mt-0.5">No holdings to allocate</span>
-                </div>
-              ) : (
-                <div className="relative w-40 h-40">
-                  <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                    {/* Background Track */}
-                    <path
-                      className="text-surface-container-highest"
-                      strokeWidth="4.5"
-                      stroke="currentColor"
-                      fill="none"
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    />
-                    {/* USD Slice: 49.3% */}
-                    <path
-                      className="text-primary"
-                      strokeDasharray="49.3, 100"
-                      strokeWidth="4.5"
-                      strokeLinecap="round"
-                      stroke="currentColor"
-                      fill="none"
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    />
-                    {/* GBP Slice: 42.1% */}
-                    <path
-                      className="text-secondary"
-                      strokeDasharray="42.1, 100"
-                      strokeDashoffset="-49.3"
-                      strokeWidth="4.5"
-                      strokeLinecap="round"
-                      stroke="currentColor"
-                      fill="none"
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    />
-                    {/* EUR Slice: 8.6% */}
-                    <path
-                      className="text-tertiary-fixed"
-                      strokeDasharray="8.6, 100"
-                      strokeDashoffset="-91.4"
-                      strokeWidth="4.5"
-                      strokeLinecap="round"
-                      stroke="currentColor"
-                      fill="none"
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    />
-                  </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                    <span className="font-data-mono-lg text-data-mono-lg font-bold text-on-surface">100%</span>
-                    <span className="font-label-caps text-[9px] text-outline uppercase">Allocated</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Currency Breakdown Legend */}
-            {isMissingTradeHistory ? (
-              <div className="p-3 text-center text-outline font-mono text-xs bg-surface-container-lowest rounded border border-surface-container/30">
-                Awaiting TradeHistory*.csv
-              </div>
-            ) : (
-              <div className="space-y-2 mt-2">
-                <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-primary" />
-                    <span className="font-body-sm text-xs text-on-surface font-medium">US Dollar (USD)</span>
-                  </div>
-                  <span className="font-data-mono-sm text-xs text-on-surface">49.3% • £321.9k</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-secondary" />
-                    <span className="font-body-sm text-xs text-on-surface font-medium">British Pound (GBP)</span>
-                  </div>
-                  <span className="font-data-mono-sm text-xs text-on-surface">42.1% • £274.9k</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-tertiary-fixed" />
-                    <span className="font-body-sm text-xs text-on-surface font-medium">Euro (EUR)</span>
-                  </div>
-                  <span className="font-data-mono-sm text-xs text-on-surface">8.6% • £56.2k</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-4 pt-3 border-t border-surface-container/40 text-[11px] text-outline font-mono flex items-center justify-between">
-            <span>RISK HEDGE: 0% SYNTHETIC</span>
-            <span className="text-primary">NO LIQUIDITY LOCK</span>
-          </div>
-        </div>
       </div>
 
       {/* ─────────────────────────────────────────────────────────────
-          MIDDLE SECTION 2: Single Instrument Inspector (Interactive)
+          FLOATING WINDOW: Single Instrument Inspector (opens from the ledger)
       ───────────────────────────────────────────────────────────── */}
-      <div className="bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm">
-        {!selectedHolding ? (
-          <div className="py-12 px-4 flex flex-col items-center justify-center text-center">
-            <span className="material-symbols-outlined text-3xl text-outline mb-2">query_stats</span>
-            <span className="font-headline-md text-sm text-on-surface font-medium">Single Instrument Inspector</span>
-            <span className="font-body-sm text-xs text-on-surface-variant max-w-sm mt-1">
-              {isMissingTradeHistory
-                ? 'Missing Trade History: Upload Trade*.csv to view execution trajectory and holding analytics.'
-                : 'No instrument selected.'}
-            </span>
-          </div>
-        ) : (
-          <div>
+      {selectedHolding && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setSelectedTicker(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Single Instrument Inspector & Execution Blotter"
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-6xl max-h-[90vh] overflow-y-auto bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-2xl"
+          >
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-space-sm border-b border-surface-container/40 mb-space-sm">
               <div className="flex items-center gap-space-sm">
+                <button
+                  type="button"
+                  onClick={() => setSelectedTicker(null)}
+                  title="Close (Esc)"
+                  aria-label="Close inspector"
+                  className="w-7 h-7 flex items-center justify-center rounded bg-surface-container hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
                 <span className="material-symbols-outlined text-[20px] text-primary">insights</span>
                 <div>
                   <span className="font-headline-md text-headline-md text-on-surface font-semibold">
@@ -776,7 +710,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
           <div className="flex items-center gap-space-sm">
             <span className="font-label-caps text-label-caps text-on-surface-variant">SWITCH TICKER:</span>
             <select
-              value={selectedTicker}
+              value={selectedHolding.ticker}
               onChange={(e) => setSelectedTicker(e.target.value)}
               className="px-3 py-1.5 rounded bg-surface-container-lowest border border-surface-container text-xs font-mono text-primary font-bold focus:outline-none focus:border-primary"
             >
@@ -835,55 +769,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
               </div>
             </div>
 
-            {/* Chart SVG */}
-            <svg className="w-full h-56" viewBox="0 0 900 240">
-              <defs>
-                <linearGradient id="priceGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="#4edea3" stopOpacity="0.25" />
-                  <stop offset="100%" stopColor="#4edea3" stopOpacity="0.0" />
-                </linearGradient>
-              </defs>
-              {/* Gridlines */}
-              <line x1="40" y1="40" x2="880" y2="40" stroke="#1c2028" strokeDasharray="3,3" />
-              <line x1="40" y1="100" x2="880" y2="100" stroke="#1c2028" strokeDasharray="3,3" />
-              <line x1="40" y1="160" x2="880" y2="160" stroke="#1c2028" strokeDasharray="3,3" />
-              <line x1="40" y1="210" x2="880" y2="210" stroke="#1c2028" />
-
-              {/* Area path */}
-              <path
-                d="M 40 180 Q 150 160, 240 135 T 450 120 T 650 75 T 880 50 L 880 210 L 40 210 Z"
-                fill="url(#priceGradient)"
-              />
-              {/* Line vector */}
-              <path
-                d="M 40 180 Q 150 160, 240 135 T 450 120 T 650 75 T 880 50"
-                fill="none"
-                stroke="#4edea3"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-              />
-
-              {/* BUY Marker 1 */}
-              <circle cx="240" cy="135" r="5" fill="#4edea3" />
-              <polygon points="240,118 235,128 245,128" fill="#4edea3" />
-              <text x="240" y="112" fill="#4edea3" fontSize="10" textAnchor="middle" fontFamily="monospace">
-                BUY +40
-              </text>
-
-              {/* BUY Marker 2 */}
-              <circle cx="530" cy="98" r="5" fill="#4edea3" />
-              <polygon points="530,81 525,91 535,91" fill="#4edea3" />
-              <text x="530" y="75" fill="#4edea3" fontSize="10" textAnchor="middle" fontFamily="monospace">
-                BUY +25
-              </text>
-
-              {/* SELL Marker */}
-              <circle cx="700" cy="68" r="5" fill="#ffb4ab" />
-              <polygon points="700,85 695,75 705,75" fill="#ffb4ab" />
-              <text x="700" y="98" fill="#ffb4ab" fontSize="10" textAnchor="middle" fontFamily="monospace">
-                SELL -15
-              </text>
-            </svg>
+            <PriceTradeChart ticker={selectedHolding.ticker} trades={chartTrades} />
           </div>
 
           {/* Single Instrument Trade Fills (4 cols) */}
@@ -892,60 +778,62 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
               <span className="font-label-caps text-label-caps text-outline block mb-2 uppercase">
                 {selectedHolding.ticker} Execution Audit
               </span>
-              <div className="space-y-2">
-                <div className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono">
-                  <div>
-                    <span className="text-primary font-bold">BUY 40 shs</span>
-                    <span className="text-outline block text-[10px]">2026-09-15 14:10</span>
+              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                {inspectorTrades.length === 0 ? (
+                  <div className="p-3 text-center text-outline font-mono text-xs">
+                    No executions recorded for this instrument.
                   </div>
-                  <div className="text-right">
-                    <span className="text-on-surface font-semibold">$118.40</span>
-                    <span className="text-outline block text-[10px]">Settled: £3,660.10</span>
-                  </div>
-                </div>
-
-                <div className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono">
-                  <div>
-                    <span className="text-primary font-bold">BUY 25 shs</span>
-                    <span className="text-outline block text-[10px]">2026-08-02 16:35</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-on-surface font-semibold">$122.10</span>
-                    <span className="text-outline block text-[10px]">Settled: £2,402.15</span>
-                  </div>
-                </div>
-
-                <div className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono">
-                  <div>
-                    <span className="text-tertiary font-bold">SELL 15 shs</span>
-                    <span className="text-outline block text-[10px]">2026-07-11 15:02</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-on-surface font-semibold">$129.80</span>
-                    <span className="text-outline block text-[10px]">Proceeds: £1,520.40</span>
-                  </div>
-                </div>
+                ) : (
+                  inspectorTrades.map((t, i) => {
+                    const isBuy = t.activity !== 'SELL';
+                    return (
+                      <div
+                        key={`${t.date}-${t.time}-${i}`}
+                        className="p-2 rounded bg-surface-container-low border border-surface-container/30 flex items-center justify-between text-xs font-mono"
+                      >
+                        <div>
+                          <span className={`${isBuy ? 'text-primary' : 'text-tertiary'} font-bold`}>
+                            {isBuy ? 'BUY' : 'SELL'} {t.qty.toLocaleString()} shs
+                          </span>
+                          <span className="text-outline block text-[10px]">
+                            {t.date} {t.time}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-on-surface font-semibold">{t.fill}</span>
+                          {t.value && (
+                            <span className="text-outline block text-[10px]">
+                              {isBuy ? 'Settled' : 'Proceeds'}: {t.value}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
 
             <div className="pt-2 mt-2 border-t border-surface-container/30 flex items-center justify-between text-[11px] font-mono text-outline">
               <span>BROKER: IG BROKERAGE</span>
-              <span className="text-secondary">ACCOUNT #QX2B3</span>
+              <span className="text-secondary">{inspectorTrades.length} EXECUTIONS</span>
             </div>
           </div>
         </div>
-      </div>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
 
       {/* ─────────────────────────────────────────────────────────────
-          MIDDLE SECTION 3: Trade History This Quarter
+          MIDDLE SECTION 3: Trade Activities & Currency/Asset Allocation
       ───────────────────────────────────────────────────────────── */}
-      <div className="bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-space-lg">
+      {/* Trade Activities (8 Cols) */}
+      <div className="xl:col-span-8 min-w-0 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-sm mb-space-sm border-b border-surface-container/40">
           <div className="flex items-center gap-space-sm">
             <span className="material-symbols-outlined text-[18px] text-secondary">history</span>
-            <span className="font-headline-md text-headline-md text-on-surface font-semibold">
+            <span className="font-headline-md text-headline-md text-on-surface font-semibold whitespace-nowrap">
               Trade Activities
             </span>
           </div>
@@ -1149,6 +1037,116 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+        {/* Currency & Sector Allocation (4 Cols) */}
+        <div className="xl:col-span-4 bg-surface-container-low p-space-md rounded-xl border border-surface-container/60 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-space-xs mb-space-sm border-b border-surface-container/40">
+              <span className="font-headline-md text-headline-md text-on-surface font-semibold flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[18px] text-secondary">donut_large</span>
+                Currency & Asset Allocation
+              </span>
+              <span className="font-label-caps text-label-caps text-outline">SPOT FX</span>
+            </div>
+
+            {/* SVG Donut Chart */}
+            <div className="flex items-center justify-center py-4">
+              {isMissingTradeHistory ? (
+                <div className="flex flex-col items-center justify-center h-40 text-center text-outline">
+                  <span className="material-symbols-outlined text-3xl mb-1 text-outline/50">pie_chart</span>
+                  <span className="font-mono text-xs">Awaiting Trade History</span>
+                  <span className="text-[10px] text-outline/60 mt-0.5">No holdings to allocate</span>
+                </div>
+              ) : (
+                <div className="relative w-40 h-40">
+                  <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
+                    {/* Background Track */}
+                    <path
+                      className="text-surface-container-highest"
+                      strokeWidth="4.5"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                    {/* USD Slice: 49.3% */}
+                    <path
+                      className="text-primary"
+                      strokeDasharray="49.3, 100"
+                      strokeWidth="4.5"
+                      strokeLinecap="round"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                    {/* GBP Slice: 42.1% */}
+                    <path
+                      className="text-secondary"
+                      strokeDasharray="42.1, 100"
+                      strokeDashoffset="-49.3"
+                      strokeWidth="4.5"
+                      strokeLinecap="round"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                    {/* EUR Slice: 8.6% */}
+                    <path
+                      className="text-tertiary-fixed"
+                      strokeDasharray="8.6, 100"
+                      strokeDashoffset="-91.4"
+                      strokeWidth="4.5"
+                      strokeLinecap="round"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                    <span className="font-data-mono-lg text-data-mono-lg font-bold text-on-surface">100%</span>
+                    <span className="font-label-caps text-[9px] text-outline uppercase">Allocated</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Currency Breakdown Legend */}
+            {isMissingTradeHistory ? (
+              <div className="p-3 text-center text-outline font-mono text-xs bg-surface-container-lowest rounded border border-surface-container/30">
+                Awaiting TradeHistory*.csv
+              </div>
+            ) : (
+              <div className="space-y-2 mt-2">
+                <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-primary" />
+                    <span className="font-body-sm text-xs text-on-surface font-medium">US Dollar (USD)</span>
+                  </div>
+                  <span className="font-data-mono-sm text-xs text-on-surface">49.3% • £321.9k</span>
+                </div>
+                <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-secondary" />
+                    <span className="font-body-sm text-xs text-on-surface font-medium">British Pound (GBP)</span>
+                  </div>
+                  <span className="font-data-mono-sm text-xs text-on-surface">42.1% • £274.9k</span>
+                </div>
+                <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-tertiary-fixed" />
+                    <span className="font-body-sm text-xs text-on-surface font-medium">Euro (EUR)</span>
+                  </div>
+                  <span className="font-data-mono-sm text-xs text-on-surface">8.6% • £56.2k</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-surface-container/40 text-[11px] text-outline font-mono flex items-center justify-between">
+            <span>RISK HEDGE: 0% SYNTHETIC</span>
+            <span className="text-primary">NO LIQUIDITY LOCK</span>
+          </div>
         </div>
       </div>
 
