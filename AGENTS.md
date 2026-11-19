@@ -10,10 +10,10 @@ Streamlit-based Portfolio Management Dashboard deployed to Google Cloud Run (GCP
 |------|---------|
 | `rewrite_login.py` | **Main app entry point** — Streamlit login/auth flow, dashboard orchestrator |
 | `FNZ-perf-streamlit-report.py` | Secondary Streamlit app — FNZ Vanguard performance report viewer |
-| `firebase_service.py` | Firebase Firestore login event logging, email/password auth helpers |
+| `shared_service/firebase_service.py` | Firebase Firestore login event logging, email/password auth helpers |
 | `backend/` | FastAPI REST API backend (`backend/app/services/price_service.py` handles backend market data) |
 | `frontend/` | React 18 + Vite SPA (Tailwind CSS, Stitch dark theme) |
-| `alpaca_client.py`, `market_data_api.py`, `trading212_api.py` | Broker/market data API clients (`market_data_api.py` & `getEODprice.py` are legacy Streamlit-only) |
+| `alpaca_client.py`, `market_data_api.py`, `shared_service/trading212_api.py` | Broker/market data API clients (`market_data_api.py` & `getEODprice.py` are legacy Streamlit-only) |
 | `trading212/` | Trading212 history processing (`merge_trading212_history.py`, `t212dec.py`, `t212enc.py`) |
 | `ig/` | IG broker news download scripts (Dockerized for RPI4/ARM64) |
 | `terraform/` | GCP Cloud Run infrastructure (main.tf, state) |
@@ -71,7 +71,7 @@ Runs: gitleaks, detect-secrets, check-yaml, check-json, end-of-file-fixer, trail
 ## Architecture Notes
 
 - The app uses **dual auth**: Firebase email/password + GitHub OAuth via `streamlit-oauth`.
-- `rewrite_login.py` dynamically imports from `.agent/skills/users-login-record-firebase/scripts/` — this is an unconventional path dependency.
+- `rewrite_login.py` imports Firebase auth/logging from `shared_service.firebase_service`.
 - Streamlit runs on port **8501 locally** but port **8080 in Docker/Cloud Run**.
 - The `company_name_to_ticker.json` and `user_portfolio_values.json` are local data files at repo root.
 - `t212.dat` is a Trading212 data file at repo root.

@@ -68,7 +68,7 @@ def sign_up_with_email_password(email: str, password: str) -> Dict[str, Any]:
 
 def log_login_event(user_email: str, provider: str = "unknown", user_name: Optional[str] = None, user_id: Optional[str] = None) -> bool:
     try:
-        from firebase_service import log_login_event as fb_log
+        from shared_service.firebase_service import log_login_event as fb_log
         return fb_log(user_email=user_email, user_name=user_name, provider=provider, user_id=user_id)
     except Exception:
         # Graceful fallback if firebase-admin is unconfigured locally

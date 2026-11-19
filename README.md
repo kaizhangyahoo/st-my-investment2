@@ -138,9 +138,9 @@ pip install -r backend/requirements.txt   # FastAPI, Pydantic, pandas
 pip install -r requirements.txt           # legacy root modules the backend still imports
 npm install --prefix frontend
 ```
-> **Both requirements files are required.** The backend reaches legacy root modules at runtime —
-> `firebase_service.py` requires `firebase-admin`, `trading212_api.py` is needed for Trading 212
-> integration, and `rewrite_ticker_resolution.py` is needed for SEC ticker mapping, none of which
+> **Both requirements files are required.** The backend imports shared modules under `shared_service/` at runtime —
+> `shared_service/firebase_service.py` requires `firebase-admin`, `shared_service/trading212_api.py` is needed for Trading 212
+> integration, and `shared_service/ticker_resolution.py` is needed for SEC ticker mapping, none of which
 > are included in `backend/requirements.txt`. Note that market price fetching is decoupled and
 > handled independently by `backend/app/services/price_service.py` (which has no Streamlit dependency).
 

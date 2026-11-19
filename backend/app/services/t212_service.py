@@ -6,7 +6,7 @@ def get_t212_client(api_key: Optional[str] = None, api_secret: Optional[str] = N
     secret = api_secret or settings.T212_API_SECRET
     if not key or not secret:
         raise ValueError("Trading 212 API key and secret are required")
-    from trading212_api import Trading212API
+    from shared_service.trading212_api import Trading212API
     return Trading212API(api_key=key, api_secret=secret)
 
 def fetch_t212_summary(api_key: Optional[str] = None, api_secret: Optional[str] = None) -> Dict[str, Any]:

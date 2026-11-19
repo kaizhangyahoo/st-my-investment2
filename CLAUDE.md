@@ -69,27 +69,41 @@ python3 .agent/scripts/cleanup_registry.py
 2. Renders the OAuth/email login page if not authenticated.
 3. On successful login, runs `exec(open("rewrite_tab_1.py").read())` — the dashboard runs in the login script's namespace, not as an imported module.
 
-Authentication supports: Google (Streamlit native OIDC), GitHub/Facebook (streamlit-oauth), and email/password (Firebase REST API). Login events are logged to Firestore via `firebase_service.py`.
+Authentication supports: Google (Streamlit native OIDC), GitHub/Facebook (streamlit-oauth), and email/password (Firebase REST API). Login events are logged to Firestore via `shared_service/firebase_service.py`.
+
+### Two Apps, One Import Root
+
+The repository hosts both the legacy Streamlit app and the FastAPI + React application from the root directory. To keep boundaries clean:
+- **`shared_service/`**: Holds modules genuinely shared and imported by both legacy Streamlit and the backend (`firebase_service.py`, `ticker_resolution.py`, `trading212_api.py`).
+- **Streamlit-only modules**: (`rewrite_login.py`, `rewrite_tab_1.py`, `getEODprice.py`, `market_data_api.py`, `rewrite_plot_portfolio_weights.py`) live at the repo root and must not be imported by backend services.
+- **Backend services**: (`backend/app/services/*`) live in `backend/` and implement their own API-driven logic (e.g. `price_service.py`, `market_service.py`) without dependencies on the Streamlit runtime.
+- **`archive/`**: Holds deprecated or standalone scripts not used in the active flows (`rewrite_tab_4pi.py`, `verify_client.py`, `debug_positions.py`, `plot_portfolio_weights.py`, `scrape_news_playwright.py`, `scrape_news_requests.py`).
 
 ### Key Source Files
 
 | File | Purpose |
 |---|---|
-| `rewrite_login.py` | Auth gate and app entry point |
+| `rewrite_login.py` | Auth gate and Streamlit app entry point |
 | `rewrite_tab_1.py` | Main portfolio dashboard (~1100 lines, procedural) |
-| `rewrite_tab_4pi.py` | Alternate dashboard variant with Trading 212 CSV analysis and local encrypted credential support — not wired into the main login flow |
 | `rewrite_plot_portfolio_weights.py` | Plotly charting functions (portfolio weights, cashflow waterfall, value time series, benchmark comparison, ticker price + trade markers) |
-| `rewrite_ticker_resolution.py` | Resolves instrument names → Yahoo Finance tickers via SEC EDGAR |
-| `trading212_api.py` | Trading 212 REST API client with cursor-based pagination (`fetch_all_paginated()`) |
+| `shared_service/ticker_resolution.py` | Resolves instrument names → Yahoo Finance tickers via SEC EDGAR |
+| `shared_service/trading212_api.py` | Trading 212 REST API client with cursor-based pagination (`fetch_all_paginated()`) |
+| `shared_service/firebase_service.py` | Firebase Admin SDK init, Firestore login logging (independent regular file from `.agent/skills/users-login-record-firebase/scripts/`) |
 | `alpaca_client.py` | Alpaca Market Data v2 API client |
 | `market_data_api.py` | *(Streamlit-only)* Yahoo Finance OHLC, Finage (threaded with semaphore), Nasdaq Data Link classes |
 | `getEODprice.py` | *(Streamlit-only)* TwelveData and EOD Historical Data price fetching |
 | `backend/app/services/price_service.py` | Market price fetcher for FastAPI backend (Yahoo primary, TwelveData & EODHD fallbacks; no Streamlit dependency) |
-| `firebase_service.py` | Firebase Admin SDK init, Firestore login logging (symlinked from `.agent/skills/users-login-record-firebase/scripts/`) |
 | `miniEnc.py` | XOR+base64 obfuscation for API keys embedded in source — obfuscation only, not real encryption |
 | `trading212/t212enc.py` / `t212dec.py` | Fernet/PBKDF2 encryption for Trading 212 API credentials stored in `trading212/t212.dat` |
 | `company_name_to_ticker.json` | Editable cache mapping instrument names to Yahoo Finance tickers |
 | `user_portfolio_values.json` | On-disk cache of historical portfolio values keyed by account ID |
+
+### Shared On-Disk State
+
+Two files are shared on disk:
+- `company_name_to_ticker.json`: Shared symbol mapping dictionary.
+- `user_portfolio_values.json`: Shared historical portfolio value map.
+  - *Note on concurrency and data representation:* The two apps handle values differently (different pence conversion, date grids, and keying — backend writes `ig:<user_id>`, legacy writes bare T212 account IDs). The backend uses an atomic read-merge-write pattern via temporary files, whereas legacy writes out an import-time snapshot.
 
 ### State Management
 
@@ -112,5 +126,5 @@ All prices are converted to GBP using GBPUSD and GBPEUR rates from Yahoo Finance
 
 - **GCP Project**: `project-e29b631c-29b0-4dd7-86b`, region `us-central1`
 - **Live URL**: `https://streamlit-app-rj6qghjncq-uc.a.run.app`
-- **Container base**: `mcr.microsoft.com/playwright/python:v1.49.0-noble` (Playwright needed for IG scraper)
+- **Container base**: `python:3.14-slim`
 - **Terraform**: manages Cloud Run service, IAM, and Secret Manager access. State file at `terraform/terraform.tfstate`.

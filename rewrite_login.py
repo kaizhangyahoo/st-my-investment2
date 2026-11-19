@@ -8,10 +8,8 @@ st.set_page_config(
 )
 
 # Import Firebase service for login logging and email/password auth
-sys.path.append(os.path.join(os.getcwd(), ".agent/skills/users-login-record-firebase/scripts"))
-
 try:
-    from firebase_service import log_login_event, sign_in_with_email_password, sign_up_with_email_password
+    from shared_service.firebase_service import log_login_event, sign_in_with_email_password, sign_up_with_email_password
     FIREBASE_AVAILABLE = True
 except ImportError:
     FIREBASE_AVAILABLE = False

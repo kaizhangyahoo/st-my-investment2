@@ -64,7 +64,7 @@ def save_ticker_mappings(mappings: Dict[str, str]) -> Dict[str, str]:
 def resolve_tickers_sec(market_names: List[str]) -> Dict[str, Optional[str]]:
     resolved: Dict[str, Optional[str]] = {}
     try:
-        from rewrite_ticker_resolution import use_sec_site
+        from shared_service.ticker_resolution import use_sec_site
         sec_resolved = use_sec_site(market_names)
         for name in market_names:
             resolved[name] = sec_resolved.get(name, None)
