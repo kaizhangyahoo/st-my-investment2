@@ -18,19 +18,23 @@ def get_history(
     Read-only: generating values is `POST /history/compute` (KAN-19), so a provider gap
     there (e.g. delisted tickers) cannot blank the chart.
 
-    Without `account_id` the response is every stored account summed per date.
+    Always one account's stored series, verbatim. `account_id` defaults to the richest stored
+    account, because the file is keyed per account and the accounts in it are not all the same
+    person's — summing them produced a number nobody holds (KAN-46).
+
+    `fillable_gap` says whether recomputing could actually add anything: only the caller's own
+    key is computable here, and only a series that stops short of today has a tail to extend.
     """
-    points = (
-        history_service.read_cached_series(account_id)
-        if account_id
-        else history_service.read_consolidated_series()
-    )
+    own_key = history_service.portfolio_key(user.get("sub", "default"))
+    key = account_id or history_service.default_account() or own_key
+    points = history_service.read_cached_series(key)
     return {
         "points": points,
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "data_quality": {"degraded": False},
         "accounts": history_service.stored_accounts(),
-        "account_id": account_id,
+        "account_id": key,
+        "fillable_gap": key == own_key and history_service.is_behind(points),
     }
 
 @router.post("/history/compute", response_model=PortfolioHistoryResponse)

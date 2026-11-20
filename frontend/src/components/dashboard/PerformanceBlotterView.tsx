@@ -131,6 +131,9 @@ export const PerformanceBlotterView: React.FC = () => {
   }, [accountId, reloadKey]);
 
   const points = response?.points ?? [];
+  // Before the first click the backend picks the account, so the highlight comes from the
+  // response; after one, from local state, so the button reacts before the fetch returns.
+  const selectedAccount = accountId ?? response?.account_id;
 
   const visible = useMemo(() => {
     if (timeframe === 'ALL' || points.length === 0) return points;
@@ -172,31 +175,35 @@ export const PerformanceBlotterView: React.FC = () => {
         <div className="flex items-center gap-space-sm">
           {accounts.length > 0 && (
             <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded border border-surface-container font-label-caps text-label-caps">
-              {[undefined, ...accounts].map((acc) => (
+              {accounts.map((acc) => (
                 <button
-                  key={acc ?? 'TOTAL'}
+                  key={acc}
                   type="button"
                   onClick={() => setAccountId(acc)}
                   className={`px-2 py-0.5 rounded transition-colors ${
-                    accountId === acc
+                    selectedAccount === acc
                       ? 'bg-surface-container-high text-primary font-bold'
                       : 'text-outline hover:text-on-surface'
                   }`}
                 >
-                  {acc ?? 'TOTAL'}
+                  {acc}
                 </button>
               ))}
             </div>
           )}
-          <button
-            type="button"
-            onClick={recompute}
-            disabled={computing}
-            title="Value the uploaded trade history and store it in user_portfolio_values.json"
-            className="px-2 py-1 rounded border border-surface-container text-xs font-mono text-outline hover:text-on-surface disabled:opacity-50"
-          >
-            {computing ? 'RECOMPUTING…' : 'RECOMPUTE'}
-          </button>
+          {/* This panel only reads stored values, so there is normally nothing to compute.
+              The backend offers this when the series it would write stops short of today. */}
+          {response?.fillable_gap && (
+            <button
+              type="button"
+              onClick={recompute}
+              disabled={computing}
+              title="This account's series stops before today — value the uploaded trade history to extend it"
+              className="px-2 py-1 rounded border border-surface-container text-xs font-mono text-outline hover:text-on-surface disabled:opacity-50"
+            >
+              {computing ? 'RECOMPUTING…' : 'FILL GAP'}
+            </button>
+          )}
           <span
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono font-medium ${presentation.text}`}
             title={status.detail.join('\n')}

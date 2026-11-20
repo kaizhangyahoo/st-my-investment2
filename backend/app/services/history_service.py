@@ -11,9 +11,13 @@ The reference is `rewrite_tab_1.py` (`calculate_portfolio_value_on_date` /
    currency silently understated the total.
 
 Both apps share `user_portfolio_values.json`, so its shape is fixed: a flat
-`{key: {"YYYY-MM-DD": float}}`. Legacy owns the Trading 212 account-id keys ("QX2B3"); this
-module writes `ig:<user_id>` keys. Writes re-read and merge before an atomic replace so a
-concurrent legacy run loses at most its own unflushed dates, not the whole file.
+`{key: {"YYYY-MM-DD": float}}`, one series per account. Legacy owns the bare broker account-id
+keys ("QX2B3" is an IG account, not a Trading 212 one — the statement is
+`TradeHistory-QX2B3-(...).csv`); this module writes `ig:<user_id>` keys. The keys are not all
+the same person's and two of them can be the same account, so they must never be summed: that
+mislabelling is what made a cross-account total look reasonable (KAN-46). Writes re-read and
+merge before an atomic replace so a concurrent legacy run loses at most its own unflushed dates,
+not the whole file.
 """
 import json
 import os
@@ -190,35 +194,31 @@ def stored_accounts() -> List[str]:
     return sorted(k for k, v in _read_cache_file().items() if isinstance(v, dict) and v)
 
 
-def read_consolidated_series() -> List[Dict[str, Any]]:
-    """Sum of every stored account per date.
+def default_account() -> Optional[str]:
+    """The stored account holding the most values.
 
-    Each account is forward-filled only inside its own recorded date range, so a date one
-    account skipped does not dip the total, and nothing is invented before an account's first
-    or after its last stored value.
+    One key per account, written by two different apps, so there is nothing to aggregate and no
+    id worth hard-coding; the richest series is the only sensible thing to land on (KAN-46).
     """
-    columns: Dict[str, pd.Series] = {}
-    for key, account in _read_cache_file().items():
-        if not isinstance(account, dict):
-            continue
-        s = pd.Series(
-            {d: float(v) for d, v in account.items() if v is not None}, dtype="float64"
-        )
-        if s.empty:
-            continue
-        s.index = pd.to_datetime(s.index, errors="coerce")
-        s = s[s.index.notna()]
-        columns[key] = s[~s.index.duplicated(keep="last")].sort_index()
-    if not columns:
-        return []
-
-    frame = pd.DataFrame(columns).sort_index()
-    in_range = pd.DataFrame(
-        {k: (frame.index >= s.index.min()) & (frame.index <= s.index.max()) for k, s in columns.items()},
-        index=frame.index,
+    counts = sorted(
+        ((key, len(v)) for key, v in _read_cache_file().items() if isinstance(v, dict) and v),
+        key=lambda kv: (-kv[1], kv[0]),
     )
-    total = frame.ffill().where(in_range).sum(axis=1, min_count=1).dropna()
-    return [{"date": d.strftime("%Y-%m-%d"), "value": float(v)} for d, v in total.items()]
+    return counts[0][0] if counts else None
+
+
+def is_behind(points: List[Dict[str, Any]], today: Optional[str] = None) -> bool:
+    """Whether a series stops before today, i.e. has a tail that computing could extend.
+
+    Only the tail counts. Every interior missing day in the stored accounts is a single
+    isolated date -- a market holiday, not a gap -- so treating those as fillable would offer
+    to recompute a series that is already complete.
+    """
+    end = pd.Timestamp(today) if today else pd.Timestamp.now().normalize()
+    if not points:
+        return True
+    last = pd.Timestamp(points[-1]["date"])
+    return last < end and len(pd.bdate_range(last, end)) > 1
 
 
 def compute_history(

@@ -101,9 +101,12 @@ export interface PortfolioHistoryResponse {
   points: PortfolioHistoryPoint[];
   computed_at: string;
   data_quality: HistoryDataQuality;
-  // Account keys stored in user_portfolio_values.json; account_id is null for the summed total.
+  // Account keys stored in user_portfolio_values.json. account_id is the one this series is
+  // for, resolved by the backend when the request omitted it.
   accounts: string[];
   account_id: string | null;
+  // True only when recomputing this account could actually add dates to it.
+  fillable_gap: boolean;
 }
 
 export interface CashflowItem {

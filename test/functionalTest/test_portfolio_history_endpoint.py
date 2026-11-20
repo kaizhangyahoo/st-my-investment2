@@ -56,17 +56,51 @@ class TestHistoryEndpoint(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()
 
-    def test_default_is_the_total_of_stored_accounts(self):
+    def test_default_is_the_richest_account_not_a_total(self):
         body = self.get()
-        # QX2B3 is carried over its 01-03 gap; QRPOL only counts inside its own range.
         self.assertEqual(
             [(p["date"], p["value"]) for p in body["points"]],
-            [("2024-01-02", 100.0), ("2024-01-03", 110.0), ("2024-01-04", 140.0), ("2024-01-05", 130.0)],
+            [("2024-01-02", 100.0), ("2024-01-04", 120.0), ("2024-01-05", 130.0)],
         )
+        self.assertEqual(body["account_id"], "QX2B3")
         self.assertEqual(body["accounts"], ["QRPOL", "QX2B3"])
-        self.assertIsNone(body["account_id"])
         self.assertFalse(body["data_quality"]["degraded"])
         self.assertTrue(body["computed_at"])
+
+    def test_no_response_point_ever_sums_across_accounts(self):
+        """KAN-46: the stored accounts are not one person's, and two of them were the same
+        account written by both apps, so a summed point was ~2x a portfolio nobody held."""
+        for account_id in (None, "QX2B3", "QRPOL"):
+            with self.subTest(account_id):
+                points = self.get(**({"account_id": account_id} if account_id else {}))["points"]
+                self.assertEqual(
+                    {p["date"]: p["value"] for p in points},
+                    STORED[account_id or "QX2B3"],
+                    "series must be one account verbatim",
+                )
+
+    def test_consolidation_helper_is_gone(self):
+        self.assertFalse(hasattr(history_service, "read_consolidated_series"))
+
+    def test_no_gap_is_offered_for_an_account_this_backend_cannot_write(self):
+        # Recomputing writes the caller's own "ig:" key, so offering it on a legacy account
+        # would be a button that cannot do what it says.
+        for account_id in (None, "QX2B3", "QRPOL"):
+            with self.subTest(account_id):
+                body = self.get(**({"account_id": account_id} if account_id else {}))
+                self.assertFalse(body["fillable_gap"])
+
+    def test_a_gap_is_offered_on_the_callers_own_stale_account(self):
+        history_service._merge_and_write("ig:default", {"2024-01-02": 5.0})
+        body = self.get(account_id="ig:default")
+        self.assertTrue(body["fillable_gap"])
+
+    def test_an_empty_file_offers_the_caller_their_own_account(self):
+        os.remove(self.values_path)
+        body = self.get()
+        self.assertEqual(body["account_id"], "ig:default")
+        self.assertEqual(body["points"], [])
+        self.assertTrue(body["fillable_gap"])
 
     def test_account_id_reads_a_stored_series_verbatim(self):
         body = self.get(account_id="QRPOL")

@@ -27,8 +27,8 @@ export const authApi = {
 
 export const portfolioApi = {
   getSummary: async (): Promise<PortfolioSummary> => (await api.get('/trades/summary')).data,
-  // Served from user_portfolio_values.json. No accountId returns every stored account summed
-  // per date; passing one (e.g. "QX2B3") returns that account's series.
+  // Served from user_portfolio_values.json. Always one account's series: omitting accountId
+  // lets the backend fall back to the caller's own key, it does not aggregate (KAN-46).
   getHistory: async (accountId?: string): Promise<PortfolioHistoryResponse> =>
     (await api.get('/portfolio/history', { params: accountId ? { account_id: accountId } : {} })).data,
   // Values the uploaded trade history and writes it to user_portfolio_values.json. data_quality
