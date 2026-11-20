@@ -53,10 +53,48 @@ def find_unresolved_symbols(market_names: List[str]) -> List[Dict[str, Any]]:
     return unresolved
 
 
-def save_ticker_mappings(mappings: Dict[str, str]) -> Dict[str, str]:
+def _fold(name: str) -> str:
+    """Comparison key for spotting near-duplicate names: case and whitespace runs ignored."""
+    return " ".join(name.split()).casefold()
+
+
+def normalise_mappings(mappings: Dict[str, str]) -> Dict[str, str]:
+    """
+    Validate a mapping payload before it reaches disk. Tickers are trimmed and
+    uppercased; names are kept verbatim because they must match the broker's
+    Market string exactly. Raises ValueError on a blank name or ticker, or on two
+    names that differ only by case/whitespace.
+    """
+    clean: Dict[str, str] = {}
+    seen: Dict[str, str] = {}
+    for name, ticker in mappings.items():
+        if not name.strip():
+            raise ValueError("Mapping name cannot be blank")
+        ticker = (ticker or "").strip().upper()
+        if not ticker:
+            raise ValueError(f'Ticker for "{name}" cannot be blank')
+        clash = seen.get(_fold(name))
+        if clash is not None:
+            raise ValueError(f'"{name}" duplicates "{clash}"')
+        seen[_fold(name)] = name
+        clean[name] = ticker
+    return clean
+
+
+def save_ticker_mappings(mappings: Dict[str, str], replace: bool = False) -> Dict[str, str]:
+    """
+    Merge `mappings` into the stored map, or with `replace=True` make it the whole
+    map -- the only way a delete or rename reaches the file.
+    """
     filepath = settings.TICKER_MAP_FILE
-    current = load_ticker_mappings()
-    current.update(mappings)
+    clean = normalise_mappings(mappings)
+    current = {} if replace else load_ticker_mappings()
+    existing = {_fold(name): name for name in current}
+    for name in clean:
+        clash = existing.get(_fold(name))
+        if clash is not None and clash != name:
+            raise ValueError(f'"{name}" duplicates existing mapping "{clash}"')
+    current.update(clean)
     with open(filepath, "w") as f:
         json.dump(current, f, indent=2)
     return current

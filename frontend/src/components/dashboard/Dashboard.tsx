@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar, WorkspaceTab } from '../layout/Sidebar';
 import { TopHeader } from '../layout/TopHeader';
 import { IgAnalyticsView } from './IgAnalyticsView';
@@ -39,7 +39,9 @@ export const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('ig-csv-analysis');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
-  const [gateSymbols, setGateSymbols] = useState<UnresolvedSymbol[]>([]);
+  // Unresolved names from the latest upload, shown until a fresh summary reports its own.
+  const [uploadUnresolved, setUploadUnresolved] = useState<UnresolvedSymbol[] | null>(null);
+  const [noticeOpen, setNoticeOpen] = useState(false);
   const [feed, setFeed] = useState<FeedStatus>({ state: 'loading', detail: [] });
 
   const loadData = async () => {
@@ -47,6 +49,7 @@ export const Dashboard: React.FC = () => {
     try {
       const data = await portfolioApi.getSummary();
       setSummary(data);
+      setUploadUnresolved(null);
       setFeed(deriveFeedStatus(data));
     } catch (err: any) {
       // Must not be swallowed: a silent failure is indistinguishable from loading, which is
@@ -68,25 +71,22 @@ export const Dashboard: React.FC = () => {
     loadData();
   }, []);
 
-  // Gate the valuation behind mapping review: hold the summary back until the
-  // user has either resolved the unmapped names or explicitly skipped them.
+  // Unmapped names send the user straight to Reference Data, where SEC suggestions load
+  // automatically. Valuation proceeds meanwhile with those rows excluded; saving a mapping
+  // re-runs it via onMappingsChanged.
   const handleUploadComplete = (res: UploadResult) => {
     if (res.unresolved_symbols?.length) {
-      setGateSymbols(res.unresolved_symbols);
-      return;
+      setUploadUnresolved(res.unresolved_symbols);
+      setNoticeOpen(true);
+      setActiveTab('reference-data');
     }
     loadData();
   };
 
-  const handleGateResolved = () => {
-    setGateSymbols([]);
-    loadData();
-  };
+  // Stable identity: Modal re-runs its focus-trap effect whenever onDismiss changes.
+  const dismissNotice = useCallback(() => setNoticeOpen(false), []);
 
-  const handleGateSkipped = () => {
-    setGateSymbols([]);
-    loadData();
-  };
+  const unresolvedSymbols = uploadUnresolved ?? summary?.unresolved_symbols ?? [];
 
   const handleResetPanels = async () => {
     setSummary(null);
@@ -106,7 +106,7 @@ export const Dashboard: React.FC = () => {
         onSelectTab={setActiveTab}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-        unresolvedCount={summary?.unresolved_symbols?.length ?? 0}
+        unresolvedCount={unresolvedSymbols.length}
         feed={feed}
       />
 
@@ -139,7 +139,7 @@ export const Dashboard: React.FC = () => {
 
           {activeTab === 'reference-data' && (
             <TickerMappingView
-              unresolvedSymbols={summary?.unresolved_symbols ?? []}
+              unresolvedSymbols={unresolvedSymbols}
               onMappingsChanged={loadData}
             />
           )}
@@ -149,10 +149,9 @@ export const Dashboard: React.FC = () => {
       </main>
 
       <UnresolvedSymbolsModal
-        open={gateSymbols.length > 0}
-        symbols={gateSymbols}
-        onResolved={handleGateResolved}
-        onSkip={handleGateSkipped}
+        open={noticeOpen && unresolvedSymbols.length > 0}
+        symbols={unresolvedSymbols}
+        onDismiss={dismissNotice}
       />
     </div>
   );
