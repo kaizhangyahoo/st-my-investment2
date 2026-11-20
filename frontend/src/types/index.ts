@@ -109,6 +109,36 @@ export interface PortfolioHistoryResponse {
   fillable_gap: boolean;
 }
 
+/** One timeframe's statistics. A null field means the window cannot support that figure —
+ *  render it as unavailable, never as a zero, which reads as a real measurement. */
+export interface RiskMetrics {
+  timeframe: string;
+  start_date: string | null;
+  end_date: string | null;
+  trading_days: number;
+  cumulative_return_pct: number | null;
+  cumulative_return_gbp: number | null;
+  max_drawdown_pct: number | null;
+  annualised_volatility_pct: number | null;
+  // Always null: there is no GBP risk-free rate source, so an excess return would be assumed.
+  sharpe_ratio: number | null;
+}
+
+export interface PortfolioMetricsResponse {
+  account_id: string | null;
+  // Keyed by timeframe, so switching window costs no further request.
+  windows: Record<string, RiskMetrics>;
+}
+
+export interface BenchmarkResponse {
+  symbol: string;
+  currency: string | null;
+  // Raw closes in the symbol's own quote currency, not portfolio units.
+  points: { date: string; value: number }[];
+  // Set when the provider returned nothing; draw no line at all in that case.
+  unavailable_reason: string | null;
+}
+
 export interface CashflowItem {
   category: string;
   amount: number;

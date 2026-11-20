@@ -84,9 +84,39 @@ class PortfolioHistoryResponse(BaseModel):
     # Whether recomputing could add dates to this account, i.e. whether to offer it at all.
     fillable_gap: bool = False
 
+class RiskMetrics(BaseModel):
+    """One timeframe's statistics. Every optional field is null when the window cannot support
+    it, and the client renders a null as "unavailable" rather than as a zero."""
+    timeframe: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    trading_days: int = 0
+    cumulative_return_pct: Optional[float] = None
+    cumulative_return_gbp: Optional[float] = None
+    max_drawdown_pct: Optional[float] = None
+    annualised_volatility_pct: Optional[float] = None
+    # Never populated yet: there is no GBP risk-free rate source, and an excess return computed
+    # against an assumed one would be a figure no fetched data backs.
+    sharpe_ratio: Optional[float] = None
+
+class PortfolioMetricsResponse(BaseModel):
+    account_id: Optional[str] = None
+    # Keyed by timeframe, so the client can switch windows without another request.
+    windows: Dict[str, RiskMetrics] = {}
+
 class BenchmarkPoint(BaseModel):
     date: str
     value: float
+
+class BenchmarkResponse(BaseModel):
+    symbol: str
+    currency: Optional[str] = None
+    # Raw closes in the symbol's own quote currency. The client rebases them onto the
+    # portfolio's first visible value, which cancels the unit, so a GBp quote needs no
+    # conversion here -- unlike a valuation, where the pence/pounds distinction matters.
+    points: List[BenchmarkPoint] = []
+    # Set when the provider returned nothing. The client must draw no line at all in that case.
+    unavailable_reason: Optional[str] = None
 
 class CashflowItem(BaseModel):
     category: str

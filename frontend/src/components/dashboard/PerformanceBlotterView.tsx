@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { portfolioApi } from '../../services/api';
-import { PortfolioHistoryPoint, PortfolioHistoryResponse, FeedState } from '../../types';
+import {
+  BenchmarkResponse,
+  FeedState,
+  PortfolioHistoryResponse,
+  PortfolioMetricsResponse,
+  RiskMetrics,
+} from '../../types';
+import { EquityCurveChart } from './EquityCurveChart';
 
 type Timeframe = '1M' | '3M' | '6M' | '1Y' | 'ALL';
 
@@ -10,10 +17,6 @@ const TIMEFRAME_MONTHS: Record<Exclude<Timeframe, 'ALL'>, number> = {
   '6M': 6,
   '1Y': 12,
 };
-
-// SVG plot area inside the 900x240 viewBox.
-const PLOT = { left: 50, right: 870, top: 40, bottom: 210 };
-const GRID_Y = [40, 90, 140, 190];
 
 const STATUS: Record<FeedState, { label: string; text: string; dot: string }> = {
   loading: { label: 'LOADING…', text: 'text-amber-400', dot: 'bg-amber-400' },
@@ -46,39 +49,33 @@ const deriveState = (res: PortfolioHistoryResponse): { state: FeedState; detail:
 const money = (v: number, dp = 2) =>
   v.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
 
-const axisLabel = (v: number) =>
-  Math.abs(v) >= 1000 ? `£${Math.round(v / 1000)}k` : `£${Math.round(v)}`;
+const signed = (v: number) => (v >= 0 ? '+' : '−');
 
-const buildCurve = (points: PortfolioHistoryPoint[]) => {
-  if (points.length === 0) return null;
-  const values = points.map((p) => p.value);
-  let min = Math.min(...values);
-  let max = Math.max(...values);
-  if (min === max) {
-    min -= 1;
-    max += 1;
-  }
-  const span = max - min;
-  const lastIndex = points.length - 1;
-  const x = (i: number) =>
-    lastIndex === 0
-      ? (PLOT.left + PLOT.right) / 2
-      : PLOT.left + (i / lastIndex) * (PLOT.right - PLOT.left);
-  const y = (v: number) => PLOT.bottom - ((v - min) / span) * (PLOT.bottom - PLOT.top);
+const percent = (v: number | null, dp = 1) =>
+  v === null ? '—' : `${signed(v)}${Math.abs(v).toFixed(dp)}%`;
 
-  const coords = points.map((p, i) => `${x(i).toFixed(1)} ${y(p.value).toFixed(1)}`);
-  const line = `M ${coords.join(' L ')}`;
-  return {
-    line,
-    area: `${line} L ${x(lastIndex).toFixed(1)} ${PLOT.bottom} L ${PLOT.left} ${PLOT.bottom} Z`,
-    gridValues: GRID_Y.map((gy) => min + ((PLOT.bottom - gy) / (PLOT.bottom - PLOT.top)) * span),
-    lastX: x(lastIndex),
-    lastY: y(points[lastIndex].value),
-  };
-};
+/** A tile shows a figure only when the backend computed one; a null stays a dash. */
+const MetricTile: React.FC<{
+  label: string;
+  value: string;
+  caption: string;
+  tone?: string;
+}> = ({ label, value, caption, tone = 'text-on-surface' }) => (
+  <div className="p-3 rounded-lg bg-surface-container-low border border-surface-container/60 shadow-sm">
+    <span className="font-label-caps text-[10px] text-outline uppercase block">{label}</span>
+    <span className={`font-data-mono-lg text-sm font-bold my-1 block ${tone}`}>{value}</span>
+    <span className={`font-data-mono-sm text-[10px] ${tone === 'text-outline' ? 'text-outline' : 'text-on-surface-variant'}`}>
+      {caption}
+    </span>
+  </div>
+);
 
 export const PerformanceBlotterView: React.FC = () => {
   const [response, setResponse] = useState<PortfolioHistoryResponse | null>(null);
+  const [metrics, setMetrics] = useState<PortfolioMetricsResponse | null>(null);
+  const [benchmark, setBenchmark] = useState<BenchmarkResponse | null>(null);
+  const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
+  const [showBenchmark, setShowBenchmark] = useState(false);
   const [status, setStatus] = useState<{ state: FeedState; detail: string[] }>({
     state: 'loading',
     detail: [],
@@ -111,11 +108,20 @@ export const PerformanceBlotterView: React.FC = () => {
         setResponse(data);
         setAccounts(data.accounts ?? []);
         setStatus(deriveState(data));
+        // Statistics are a separate request, so losing them leaves the curve intact and only
+        // the tiles unavailable.
+        try {
+          setMetrics(await portfolioApi.getMetrics(data.account_id ?? accountId));
+        } catch (metricsErr) {
+          console.error('Failed to load portfolio metrics', metricsErr);
+          setMetrics(null);
+        }
       } catch (err: any) {
         // Never swallowed: a silent failure used to be indistinguishable from a real series,
         // because this view substituted hardcoded sample points.
         console.error('Failed to load portfolio history', err);
         setResponse(null);
+        setMetrics(null);
         setStatus({
           state: 'offline',
           detail: [
@@ -135,26 +141,47 @@ export const PerformanceBlotterView: React.FC = () => {
   // response; after one, from local state, so the button reacts before the fetch returns.
   const selectedAccount = accountId ?? response?.account_id;
 
+  const stats: RiskMetrics | null = metrics?.windows[timeframe] ?? null;
+
+  // The backend cut the window the tiles describe, so the curve is filtered by that same
+  // boundary; its own month arithmetic is only the fallback for a failed metrics request.
   const visible = useMemo(() => {
     if (timeframe === 'ALL' || points.length === 0) return points;
-    const last = new Date(points[points.length - 1].date);
-    const cutoff = new Date(last);
+    if (stats?.start_date) {
+      const start = stats.start_date;
+      return points.filter((p) => p.date >= start);
+    }
+    const cutoff = new Date(points[points.length - 1].date);
     cutoff.setMonth(cutoff.getMonth() - TIMEFRAME_MONTHS[timeframe]);
     return points.filter((p) => new Date(p.date) >= cutoff);
-  }, [points, timeframe]);
+  }, [points, timeframe, stats]);
 
-  const curve = useMemo(() => buildCurve(visible), [visible]);
+  useEffect(() => {
+    if (!showBenchmark || benchmark || points.length === 0) return;
+    let cancelled = false;
+    setBenchmarkError(null);
+    portfolioApi
+      .getBenchmark(points[0].date)
+      .then((res) => {
+        if (cancelled) return;
+        setBenchmark(res);
+        if (res.unavailable_reason) setBenchmarkError(res.unavailable_reason);
+      })
+      .catch((err: any) => {
+        if (!cancelled) setBenchmarkError(err?.message ?? 'benchmark request failed');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showBenchmark, benchmark, points]);
+
   const presentation = STATUS[status.state];
-
-  const first = visible[0];
   const last = visible[visible.length - 1];
-  const absoluteReturn = first && last ? last.value - first.value : null;
-  const percentReturn =
-    absoluteReturn !== null && first && first.value !== 0
-      ? (absoluteReturn / first.value) * 100
-      : null;
-  const signed = (v: number) => (v >= 0 ? '+' : '−');
-  const returnColour = absoluteReturn === null || absoluteReturn >= 0 ? 'text-primary' : 'text-error';
+  const returnTone =
+    stats?.cumulative_return_pct == null || stats.cumulative_return_pct >= 0
+      ? 'text-primary'
+      : 'text-error';
+  const benchmarkPoints = benchmark && benchmark.points.length > 0 ? benchmark : null;
 
   return (
     <div className="space-y-space-lg pb-16">
@@ -253,32 +280,51 @@ export const PerformanceBlotterView: React.FC = () => {
         </ul>
       )}
 
-      {/* 2. RISK & RETURN METRICS */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-space-sm">
-        <div className="p-3 rounded-lg bg-surface-container-low border border-surface-container/60 shadow-sm">
-          <span className="font-label-caps text-[10px] text-outline uppercase block">Cumulative Return</span>
-          <span className={`font-data-mono-lg text-sm font-bold my-1 block ${returnColour}`}>
-            {percentReturn === null ? '—' : `${signed(percentReturn)}${Math.abs(percentReturn).toFixed(1)}%`}
-          </span>
-          <span className={`font-data-mono-sm text-[10px] ${returnColour}`}>
-            {absoluteReturn === null
+      {/* 2. RISK & RETURN METRICS — every figure is computed by GET /portfolio/metrics from the
+             stored series for the window shown; a null arrives as a dash, never as a zero. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-space-sm">
+        <MetricTile
+          label="Cumulative Return"
+          value={percent(stats?.cumulative_return_pct ?? null)}
+          caption={
+            stats?.cumulative_return_gbp == null
               ? 'No series'
-              : `${signed(absoluteReturn)}£${money(Math.abs(absoluteReturn))}`}
-          </span>
-        </div>
-
-        {/* Sharpe needs a risk-free rate and the rest need per-position realised P&L; none of
-            that is wired up yet, so they report as unavailable rather than showing a number. */}
-        {['Sharpe Ratio', 'Max Drawdown', 'Ann. Volatility', 'Win Rate'].map((label) => (
-          <div
-            key={label}
-            className="p-3 rounded-lg bg-surface-container-low border border-surface-container/60 shadow-sm"
-          >
-            <span className="font-label-caps text-[10px] text-outline uppercase block">{label}</span>
-            <span className="font-data-mono-lg text-sm text-outline font-bold my-1 block">—</span>
-            <span className="font-data-mono-sm text-[10px] text-outline">Not yet computed</span>
-          </div>
-        ))}
+              : `${signed(stats.cumulative_return_gbp)}£${money(Math.abs(stats.cumulative_return_gbp))} over ${stats.trading_days} days`
+          }
+          tone={returnTone}
+        />
+        <MetricTile
+          label="Max Drawdown"
+          value={stats?.max_drawdown_pct == null ? '—' : `−${stats.max_drawdown_pct.toFixed(1)}%`}
+          caption={
+            stats?.max_drawdown_pct == null
+              ? 'Needs two or more values'
+              : 'Worst peak-to-trough fall in window'
+          }
+          tone={stats?.max_drawdown_pct == null ? 'text-outline' : 'text-error'}
+        />
+        <MetricTile
+          label="Ann. Volatility"
+          value={
+            stats?.annualised_volatility_pct == null
+              ? '—'
+              : `${stats.annualised_volatility_pct.toFixed(1)}%`
+          }
+          caption={
+            stats?.annualised_volatility_pct == null
+              ? 'Needs three or more values'
+              : 'Daily deviation × √252'
+          }
+          tone={stats?.annualised_volatility_pct == null ? 'text-outline' : 'text-on-surface'}
+        />
+        {/* Deliberately unavailable rather than a figure: an excess return needs a GBP
+            risk-free rate and nothing in the stack supplies one. */}
+        <MetricTile
+          label="Sharpe Ratio"
+          value={stats?.sharpe_ratio == null ? '—' : stats.sharpe_ratio.toFixed(2)}
+          caption="Unavailable — no GBP risk-free rate source"
+          tone="text-outline"
+        />
       </div>
 
       {/* 3. EQUITY CURVE */}
@@ -295,6 +341,21 @@ export const PerformanceBlotterView: React.FC = () => {
               <span className="w-3 h-0.5 bg-primary" />
               PORTFOLIO VALUE
             </span>
+            <button
+              type="button"
+              onClick={() => setShowBenchmark((on) => !on)}
+              title="Overlay an S&P 500 tracker, rebased onto this portfolio's opening value"
+              className={`flex items-center gap-1.5 transition-colors ${
+                showBenchmark ? 'text-[#64B5F6]' : 'text-outline hover:text-on-surface'
+              }`}
+            >
+              <span
+                className={`w-3 border-t border-dotted ${
+                  showBenchmark ? 'border-[#64B5F6]' : 'border-outline'
+                }`}
+              />
+              S&P 500 BENCHMARK: {showBenchmark ? 'ON' : 'OFF'}
+            </button>
             {response && (
               <span className="text-outline">
                 AS OF {new Date(response.computed_at).toLocaleString()}
@@ -303,8 +364,14 @@ export const PerformanceBlotterView: React.FC = () => {
           </div>
         </div>
 
+        {benchmarkError && showBenchmark && (
+          <p className="font-data-mono-sm text-[10px] text-error mb-space-sm">
+            Benchmark unavailable: {benchmarkError} — no comparison line is drawn.
+          </p>
+        )}
+
         <div className="bg-surface-container-lowest p-space-md rounded-lg border border-surface-container/40">
-          {curve === null ? (
+          {visible.length === 0 ? (
             <div className="h-72 flex flex-col items-center justify-center gap-2 text-center">
               <span className="material-symbols-outlined text-[28px] text-outline">
                 {status.state === 'loading' ? 'hourglass_top' : 'show_chart'}
@@ -323,50 +390,22 @@ export const PerformanceBlotterView: React.FC = () => {
               </span>
             </div>
           ) : (
-            <svg className="w-full h-72" viewBox="0 0 900 240">
-              <defs>
-                <linearGradient id="equityGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="#4edea3" stopOpacity="0.25" />
-                  <stop offset="100%" stopColor="#4edea3" stopOpacity="0.0" />
-                </linearGradient>
-              </defs>
-
-              {GRID_Y.map((gy, i) => (
-                <g key={gy}>
-                  <line x1={PLOT.left - 10} y1={gy} x2={PLOT.right + 10} y2={gy} stroke="#1c2028" strokeDasharray="3,3" />
-                  <text x={PLOT.left - 15} y={gy + 4} fill="#86948a" fontSize="10" textAnchor="end" fontFamily="monospace">
-                    {axisLabel(curve.gridValues[i])}
-                  </text>
-                </g>
-              ))}
-              <line x1={PLOT.left - 10} y1={PLOT.bottom} x2={PLOT.right + 10} y2={PLOT.bottom} stroke="#262a33" />
-
-              <path d={curve.area} fill="url(#equityGradient)" />
-              <path d={curve.line} fill="none" stroke="#4edea3" strokeWidth="2.5" strokeLinecap="round" />
-
-              <circle cx={curve.lastX} cy={curve.lastY} r="5" fill="#4edea3" />
-              <text
-                x={curve.lastX}
-                y={Math.max(curve.lastY - 14, 14)}
-                fill="#4edea3"
-                fontSize="11"
-                textAnchor="end"
-                fontFamily="monospace"
-                fontWeight="bold"
-              >
-                LATEST: £{money(last.value, 0)}
-              </text>
-
-              <text x={PLOT.left} y="228" fill="#86948a" fontSize="10" fontFamily="monospace">
-                {first.date}
-              </text>
-              <text x={PLOT.right} y="228" fill="#86948a" fontSize="10" textAnchor="end" fontFamily="monospace">
-                {last.date}
-              </text>
-              <text x={(PLOT.left + PLOT.right) / 2} y="228" fill="#86948a" fontSize="10" textAnchor="middle" fontFamily="monospace">
-                {visible.length} TRADING DAYS
-              </text>
-            </svg>
+            <>
+              <EquityCurveChart
+                points={visible}
+                benchmark={
+                  showBenchmark && benchmarkPoints
+                    ? { symbol: benchmarkPoints.symbol, points: benchmarkPoints.points }
+                    : null
+                }
+              />
+              <div className="flex items-center justify-between font-data-mono-sm text-[10px] text-outline pt-1">
+                <span>
+                  {visible[0].date} → {last.date} • {visible.length} TRADING DAYS
+                </span>
+                <span className="text-primary font-bold">LATEST: £{money(last.value, 0)}</span>
+              </div>
+            </>
           )}
         </div>
       </div>

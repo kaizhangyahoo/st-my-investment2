@@ -1,5 +1,13 @@
 import axios from 'axios';
-import { PortfolioSummary, PortfolioHistoryResponse, CashflowItem, UserProfile, UploadResult } from '../types';
+import {
+  BenchmarkResponse,
+  CashflowItem,
+  PortfolioHistoryResponse,
+  PortfolioMetricsResponse,
+  PortfolioSummary,
+  UploadResult,
+  UserProfile,
+} from '../types';
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -35,6 +43,14 @@ export const portfolioApi = {
   // describes this run only.
   computeHistory: async (refresh = false): Promise<PortfolioHistoryResponse> =>
     (await api.post('/portfolio/history/compute', null, { params: { refresh } })).data,
+  // Risk statistics for one stored series, keyed by timeframe. Separate from getHistory so the
+  // tiles and the chart share one window definition (the server's) without a second fetch.
+  getMetrics: async (accountId?: string): Promise<PortfolioMetricsResponse> =>
+    (await api.get('/portfolio/metrics', { params: accountId ? { account_id: accountId } : {} })).data,
+  // Raw index closes, not portfolio units and not normalised server-side: rebase them onto the
+  // portfolio's own first visible value so the comparison holds for whichever window is shown.
+  getBenchmark: async (startDate?: string): Promise<BenchmarkResponse> =>
+    (await api.get('/portfolio/benchmark', { params: startDate ? { start_date: startDate } : {} })).data,
   getWaterfall: async (): Promise<CashflowItem[]> => (await api.get('/trades/waterfall')).data,
   uploadFiles: async (files: File[]): Promise<UploadResult> => {
     const formData = new FormData();
