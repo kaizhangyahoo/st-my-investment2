@@ -46,6 +46,12 @@ type WaterfallState =
 const formatSignedGbp = (amount: number) =>
   `${amount < 0 ? '-' : ''}£${Math.abs(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+// Fills arrive pre-scaled and symbol-tagged ($258.08, £5.90), or as this marker when the backend
+// could not resolve the unit of IG's minor-unit Price cell. Absence must not carry a price's weight.
+const UNKNOWN_FILL = '—';
+const fillTitle = (fill: string) =>
+  fill === UNKNOWN_FILL ? 'No per-share price could be resolved for this row (usually a corporate action)' : undefined;
+
 type ActivityPeriod = 'QUARTER' | 'YEAR' | 'ALL';
 type ActivitySide = 'ALL' | 'BUY' | 'SELL';
 
@@ -881,7 +887,12 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                               </span>
                             </div>
                             <div className="text-right">
-                              <span className="text-on-surface font-semibold">{t.fill}</span>
+                              <span
+                                className={t.fill === UNKNOWN_FILL ? 'text-outline' : 'text-on-surface font-semibold'}
+                                title={fillTitle(t.fill)}
+                              >
+                                {t.fill}
+                              </span>
                               {t.value && (
                                 <span className="text-outline block text-[10px]">
                                   {isBuy ? 'Settled' : 'Proceeds'}: {t.value}
@@ -1097,7 +1108,9 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                         {act.qty}
                       </td>
                       <td className="py-2 px-space-sm text-right text-on-surface-variant">
-                        {act.fill}
+                        <span className={act.fill === UNKNOWN_FILL ? 'text-outline' : undefined} title={fillTitle(act.fill)}>
+                          {act.fill}
+                        </span>
                       </td>
                       <td className="py-2 px-space-sm text-right font-semibold text-on-surface">
                         {act.value}

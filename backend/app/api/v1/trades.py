@@ -78,6 +78,42 @@ def find_latest_download_files() -> Tuple[Optional[str], Optional[str]]:
 
     return latest_trade, latest_trans
 
+UNKNOWN_FILL = "—"
+_CURRENCY_SYMBOLS = {'USD': '$', 'GBP': '£', 'EUR': '€'}
+# Consideration is rounded to 2dp, so a scaled Price never matches it exactly. 1% absorbs that
+# rounding while staying far tighter than the 100x gap between a minor- and major-unit reading.
+_FILL_SCALE_TOLERANCE = 0.01
+
+def _to_amount(value: Any) -> float:
+    """Coerce a statement cell to a float, tolerating currency symbols and thousands separators."""
+    parsed = pd.to_numeric(re.sub(r'[£$€,\s]', '', str(value)), errors='coerce')
+    return float(parsed) if pd.notnull(parsed) else float('nan')
+
+def normalise_fill_price(price: Any, qty: Any, consideration: Any, currency: Any) -> str:
+    """Render IG's `Price` cell as a per-share price carrying its own currency symbol.
+
+    IG quotes `Price` in minor units (cents for USD, pence for GBX) with no marker, so 25808.0
+    means $258.08. The row's own `Consideration` is gross and denominated in the same currency as
+    `Price`, so `Consideration / Quantity` is a per-share reference that settles the 1x-vs-100x
+    question without a network call. A row that cannot be settled that way returns `—`, because a
+    bare figure here may be wrong by two orders of magnitude.
+    """
+    price = _to_amount(price)
+    quantity = abs(_to_amount(qty))
+    reference = abs(_to_amount(consideration))
+    if not (price > 0 and quantity > 0 and reference > 0):
+        return UNKNOWN_FILL
+
+    per_share = reference / quantity
+    scale = min((1.0, 0.01), key=lambda s: abs(price * s - per_share))
+    scaled = price * scale
+    if abs(scaled - per_share) > _FILL_SCALE_TOLERANCE * per_share:
+        return UNKNOWN_FILL
+
+    code = str(currency).strip().upper() if pd.notnull(currency) else ''
+    symbol = _CURRENCY_SYMBOLS.get(code)
+    return f"{symbol}{scaled:,.2f}" if symbol else f"{scaled:,.2f} {code}".strip()
+
 def extract_trade_activities(df: pd.DataFrame, limit: Optional[int] = None) -> List[Dict[str, Any]]:
     """Extract formatted trade activity records (newest first) from TradeHistory DataFrame.
 
@@ -97,13 +133,14 @@ def extract_trade_activities(df: pd.DataFrame, limit: Optional[int] = None) -> L
             direction = str(row.get('Direction', '')).upper()
             qty = float(row.get('Quantity', 0)) if pd.notnull(row.get('Quantity')) else 0.0
             act = 'BUY' if direction == 'BUY' or qty > 0 else 'SELL'
-            price = row.get('Price', 0.0)
             cost = row.get('Cost/Proceeds', 0.0)
             parsed = row.get('ParsedDate')
             market = str(row.get('Market', ''))
             activities.append({
                 'qty': abs(qty),
-                'fill': f"{price}",
+                'fill': normalise_fill_price(
+                    row.get('Price'), qty, row.get('Consideration'), row.get('Currency')
+                ),
                 'value': f"£{abs(cost):,.2f}" if pd.notnull(cost) else "",
                 'date': parsed.strftime('%Y-%m-%d') if pd.notnull(parsed) else str(row.get('TextDate', '')),
                 'time': str(row.get('Time', '')),
