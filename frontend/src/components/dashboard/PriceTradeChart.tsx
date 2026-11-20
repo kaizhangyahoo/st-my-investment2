@@ -162,7 +162,9 @@ export const PriceTradeChart: React.FC<PriceTradeChartProps> = ({ ticker, trades
       xaxis: { gridcolor: '#1c2028', type: 'date' },
       yaxis: {
         gridcolor: '#1c2028',
-        range: initialYRange.current,
+        // Copy: Plotly writes zoom results back into the range array it is given, so handing it
+        // initialYRange.current directly would let a zoom overwrite our record of the full view.
+        range: [...initialYRange.current],
         title: { text: ohlc.currency ? `Price (${ohlc.currency})` : 'Price' },
       },
     };
@@ -183,9 +185,10 @@ export const PriceTradeChart: React.FC<PriceTradeChartProps> = ({ ticker, trades
   const resetView = () => {
     const el = plotRef.current;
     if (!el || !initialYRange.current) return;
-    Plotly.relayout(el, { 'xaxis.autorange': true, 'yaxis.range': initialYRange.current }).then(() =>
-      setZoomed(false)
-    );
+    Plotly.relayout(el, {
+      'xaxis.autorange': true,
+      'yaxis.range': [...initialYRange.current],
+    }).then(() => setZoomed(false));
   };
 
   useEffect(() => {
