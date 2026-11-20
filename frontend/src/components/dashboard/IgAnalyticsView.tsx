@@ -636,7 +636,6 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                     <th className="py-2 px-space-sm text-right">Market Price</th>
                     <th className="py-2 px-space-sm text-right">Value (GBP)</th>
                     <th className="py-2 px-space-sm text-right">Net P&L (GBP)</th>
-                    <th className="py-2 px-space-sm text-center">Trend (7D)</th>
                     <th className="py-2 px-space-sm text-center">Action</th>
                   </tr>
                 </thead>
@@ -676,12 +675,6 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                           >
                             {isPositive ? '+' : ''}£{p.pnl_gbp.toFixed(2)}
                           </span>
-                        </td>
-                        <td
-                          className="py-2.5 px-space-sm text-center text-outline"
-                          title="No data source: 7-day price history is not loaded for the ledger"
-                        >
-                          —
                         </td>
                         <td className="py-2.5 px-space-sm text-center">
                           <button
