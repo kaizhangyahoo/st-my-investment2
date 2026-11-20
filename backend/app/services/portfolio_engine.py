@@ -119,12 +119,30 @@ def calculate_positions_from_df(df_trade_history: pd.DataFrame) -> Dict[str, Any
         },
     }
 
+def _classify_blank_summary(market_name: Any) -> str:
+    """IG leaves `Summary` blank for interest, some fees and some deposits; recover them from MarketName."""
+    name = str(market_name) if pd.notnull(market_name) else ''
+    if 'Cash Interest' in name:
+        return 'Cash Interest'
+    if 'Section 31 Fee' in name:
+        return 'Section 31 Fee'
+    if 'Custody Fee' in name:
+        return 'Custody Fee'
+    if name.startswith('Bank Deposit') or name.startswith('Card payment'):
+        return 'Cash In'
+    return 'Uncategorised'
+
 def calculate_cashflow_waterfall(df_transactions: pd.DataFrame) -> List[Dict[str, Any]]:
     df = df_transactions.copy()
-    if 'PL Amount' in df.columns and df['PL Amount'].dtype == object:
-        df['PL Amount'] = df['PL Amount'].astype(str).str.replace(',', '')
-    df['PL Amount'] = pd.to_numeric(df['PL Amount'], errors='coerce').fillna(0)
-    df['Summary'] = df['Summary'].fillna('Cash Interest - Platform Cost')
+    # Strip thousands separators regardless of dtype: pandas 3 reads this column as StringDtype,
+    # not object, and "5,000.00" would otherwise coerce to NaN and be summed as 0.
+    df['PL Amount'] = pd.to_numeric(
+        df['PL Amount'].astype(str).str.replace(r'[£,\s]', '', regex=True), errors='coerce'
+    ).fillna(0)
+    blank = df['Summary'].isna() | (df['Summary'].astype(str).str.strip() == '')
+    market_names = df['MarketName'] if 'MarketName' in df.columns else pd.Series('', index=df.index)
+    df['Summary'] = df['Summary'].astype(object)
+    df.loc[blank, 'Summary'] = market_names[blank].map(_classify_blank_summary)
 
     summary_flow = df.groupby('Summary')['PL Amount'].sum().to_dict()
     waterfall = []

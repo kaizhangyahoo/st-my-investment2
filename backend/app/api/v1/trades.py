@@ -220,7 +220,9 @@ def get_portfolio_summary(user: dict = Depends(get_current_user)):
 def get_cashflow_waterfall(user: dict = Depends(get_current_user)):
     user_id = user.get("sub", "default")
     df = _LAST_TRANSACTION_DF.get(user_id)
-    if df is None:
+    # After a manual upload without a transaction statement, an empty list (rendered as —) is
+    # the honest answer; don't substitute a statement from ~/Downloads the user didn't choose.
+    if df is None and not _USER_MANUAL_UPLOAD.get(user_id):
         _, latest_trans = find_latest_download_files()
         if latest_trans and os.path.exists(latest_trans):
             try:

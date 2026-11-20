@@ -3,7 +3,7 @@ import { useDropzone } from 'react-dropzone';
 import { portfolioApi } from '../../services/api';
 import { ChartTrade, PriceTradeChart } from './PriceTradeChart';
 import { compactGbp, CurrencyBreakdownPie, deriveCurrencyAllocation } from './CurrencyBreakdownPie';
-import { FeedStatus, PortfolioSummary, Position, TradeActivityItem, UploadResult } from '../../types';
+import { CashflowItem, FeedStatus, PortfolioSummary, Position, TradeActivityItem, UploadResult } from '../../types';
 
 interface IgAnalyticsViewProps {
   summary: PortfolioSummary | null;
@@ -25,6 +25,26 @@ const SAMPLE_POSITIONS: Position[] = [
   { ticker: 'BL', market: 'BlackLine Inc', quantity: 120, current_price: 58.10, market_value_gbp: 5390.40, pnl_gbp: -640.20, currency: 'USD' },
   { ticker: 'FIRY', market: 'First Republic Trust Liquid', quantity: 80, current_price: 12.40, market_value_gbp: 768.00, pnl_gbp: -320.00, currency: 'USD' },
 ];
+
+// Fixed tile layout, keyed by the transaction statement's own category names. Amounts keep the
+// statement's sign (negative = cash out), so fees and net buying show negative. Anything the
+// endpoint returns that is not listed here is shown below the tiles, never dropped.
+const WATERFALL_TILES: { label: string; category: string; caption: string }[] = [
+  { label: 'DIVIDENDS RECEIVED', category: 'Dividend', caption: 'Dividend' },
+  { label: 'CASH INTEREST', category: 'Cash Interest', caption: 'Cash Interest Paid To Client' },
+  { label: 'DEALING COMMISSIONS', category: 'Share Dealing Commissions', caption: 'Share Dealing Commissions' },
+  { label: 'STAMP DUTY (SDRT)', category: 'SDRT', caption: 'SDRT' },
+  { label: 'NET CASH REINVESTED', category: 'Client Consideration', caption: 'Sell − buy consideration' },
+];
+const WATERFALL_TILE_CATEGORIES = new Set(WATERFALL_TILES.map((t) => t.category));
+
+type WaterfallState =
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'ready'; items: CashflowItem[] };
+
+const formatSignedGbp = (amount: number) =>
+  `${amount < 0 ? '-' : ''}£${Math.abs(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 type ActivityPeriod = 'QUARTER' | 'YEAR' | 'ALL';
 type ActivitySide = 'ALL' | 'BUY' | 'SELL';
@@ -66,6 +86,26 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   const [selectedInstrumentKey, setSelectedInstrumentKey] = useState<string | null>(null);
   const [showInstrumentSuggestions, setShowInstrumentSuggestions] = useState(false);
   const [highlightedSuggestion, setHighlightedSuggestion] = useState(-1);
+  const [waterfall, setWaterfall] = useState<WaterfallState>({ status: 'loading' });
+
+  // Derived from Transaction*.csv only, so it is deliberately not gated on missing trade history.
+  // Refetch whenever the summary reloads (upload, reset, mapping gate).
+  useEffect(() => {
+    let cancelled = false;
+    setWaterfall({ status: 'loading' });
+    portfolioApi
+      .getWaterfall()
+      .then((items) => {
+        if (!cancelled) setWaterfall({ status: 'ready', items });
+      })
+      .catch((err: any) => {
+        console.error('Failed to load cashflow waterfall', err);
+        if (!cancelled) setWaterfall({ status: 'error', message: err?.message ?? 'unknown error' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [summary]);
 
   // File Upload via Dropzone
   const onDrop = async (acceptedFiles: File[]) => {
@@ -288,6 +328,18 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
 
   // Every figure on this page is a placeholder when this is true, so the status bar has to say so.
   const isShowingSamples = !isMissingTradeHistory && !hasLivePositions;
+
+  const waterfallItems = waterfall.status === 'ready' ? waterfall.items : [];
+  // An empty payload means no transaction statement is loaded: show absence, not zeros.
+  const hasTransactionData = waterfallItems.length > 0;
+  const waterfallByCategory = new Map(waterfallItems.map((i) => [i.category, i.amount]));
+  const unmappedCashflows = waterfallItems.filter((i) => !WATERFALL_TILE_CATEGORIES.has(i.category));
+  const waterfallPlaceholder =
+    waterfall.status === 'loading'
+      ? { caption: 'Loading…', title: 'Fetching GET /trades/waterfall' }
+      : waterfall.status === 'error'
+        ? { caption: 'Waterfall unavailable', title: `GET /api/v1/trades/waterfall failed: ${waterfall.message}` }
+        : { caption: 'Missing transaction data', title: 'Upload a Transaction*.csv statement to populate this panel' };
 
   const allocationModel = deriveCurrencyAllocation(
     summary?.currency_allocation,
@@ -1108,25 +1160,72 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-5 gap-space-sm">
-          {[
-            'DIVIDENDS RECEIVED',
-            'CASH INTEREST',
-            'DEALING COMMISSIONS',
-            'STAMP DUTY (SDRT)',
-            'NET CASH REINVESTED',
-          ].map((label) => (
-            <div key={label} className="p-3 rounded bg-surface-container-lowest border border-surface-container/30">
-              <span className="font-label-caps text-[10px] text-outline block">{label}</span>
-              <span
-                className="font-data-mono-lg text-sm text-outline font-bold block mt-1"
-                title="No data source: cashflow categories are not yet read from the transaction statement"
-              >
-                —
-              </span>
-              <span className="font-body-sm text-[10px] text-on-surface-variant">Not yet calculated</span>
-            </div>
-          ))}
+          {WATERFALL_TILES.map(({ label, category, caption }) => {
+            const amount = waterfallByCategory.get(category);
+            if (!hasTransactionData) {
+              return (
+                <div key={label} className="p-3 rounded bg-surface-container-lowest border border-surface-container/30">
+                  <span className="font-label-caps text-[10px] text-outline block">{label}</span>
+                  <span className="font-data-mono-lg text-sm text-outline font-bold block mt-1" title={waterfallPlaceholder.title}>
+                    —
+                  </span>
+                  <span
+                    className={`font-body-sm text-[10px] flex items-center gap-1 ${waterfall.status === 'loading' ? 'text-on-surface-variant' : 'text-amber-400'}`}
+                  >
+                    {waterfall.status !== 'loading' && (
+                      <span className="material-symbols-outlined text-[12px]">warning</span>
+                    )}
+                    {waterfallPlaceholder.caption}
+                  </span>
+                </div>
+              );
+            }
+            return (
+              <div key={label} className="p-3 rounded bg-surface-container-lowest border border-surface-container/30">
+                <span className="font-label-caps text-[10px] text-outline block">{label}</span>
+                {amount === undefined ? (
+                  <span
+                    className="font-data-mono-lg text-sm text-outline font-bold block mt-1"
+                    title={`The transaction statement has no "${category}" rows`}
+                  >
+                    —
+                  </span>
+                ) : (
+                  <span
+                    className={`font-data-mono-lg text-sm font-bold block mt-1 ${amount < 0 ? 'text-error' : 'text-on-surface'}`}
+                  >
+                    {formatSignedGbp(amount)}
+                  </span>
+                )}
+                <span className="font-body-sm text-[10px] text-on-surface-variant">
+                  {amount === undefined ? 'No rows in statement' : caption}
+                </span>
+              </div>
+            );
+          })}
         </div>
+
+        {unmappedCashflows.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-surface-container/40 flex flex-wrap items-center gap-2 text-[11px] font-mono">
+            <span
+              className="text-outline uppercase"
+              title="Categories in the transaction statement with no tile above. Shown so no cashflow is silently dropped."
+            >
+              Other statement categories:
+            </span>
+            {unmappedCashflows.map((item) => (
+              <span
+                key={item.category}
+                className={`px-2 py-0.5 rounded border ${item.category === 'Uncategorised'
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+                  : 'border-surface-container/40 bg-surface-container-lowest text-on-surface-variant'
+                  }`}
+              >
+                {item.category}: <span className={item.amount < 0 ? 'text-error' : 'text-on-surface'}>{formatSignedGbp(item.amount)}</span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
