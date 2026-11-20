@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { portfolioApi } from '../../services/api';
 import { ChartTrade, PriceTradeChart } from './PriceTradeChart';
+import { compactGbp, CurrencyBreakdownPie, deriveCurrencyAllocation } from './CurrencyBreakdownPie';
 import { FeedStatus, PortfolioSummary, Position, TradeActivityItem, UploadResult } from '../../types';
 
 interface IgAnalyticsViewProps {
@@ -288,27 +289,17 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   // Every figure on this page is a placeholder when this is true, so the status bar has to say so.
   const isShowingSamples = !isMissingTradeHistory && !hasLivePositions;
 
-  const allocation = summary?.currency_allocation;
-  const allocationTotal = allocation?.total_gbp ?? 0;
-  const hasAllocation = Boolean(allocation) && allocationTotal > 0 && !isShowingSamples && !isMissingTradeHistory;
-  // Class names are literals, not interpolated: Tailwind only emits classes it can see in source.
-  const currencySlices = hasAllocation
-    ? [
-      { code: 'USD', label: 'US Dollar (USD)', gbp: allocation!.usd_gbp, text: 'text-primary', dot: 'bg-primary' },
-      { code: 'GBP', label: 'British Pound (GBP)', gbp: allocation!.gbp, text: 'text-secondary', dot: 'bg-secondary' },
-      { code: 'EUR', label: 'Euro (EUR)', gbp: allocation!.eur_gbp, text: 'text-tertiary-fixed', dot: 'bg-tertiary-fixed' },
-    ].filter((s) => s.gbp !== 0)
-    : [];
-  // The engine buckets by the statement's Currency column but converts by ticker suffix, so a
-  // holding in any other currency lands outside all three buckets. Show that gap, don't bury it.
-  const unclassifiedGbp = hasAllocation
-    ? allocationTotal - currencySlices.reduce((acc, s) => acc + s.gbp, 0)
-    : 0;
-  const allocationPct = (gbp: number) => (allocationTotal > 0 ? (gbp / allocationTotal) * 100 : 0);
-  const classifiedPct = allocationPct(allocationTotal - unclassifiedGbp);
-  const hasUnclassified = hasAllocation && Math.abs(allocationPct(unclassifiedGbp)) >= 0.5;
-  const compactGbp = (v: number) =>
-    Math.abs(v) >= 1000 ? `£${(v / 1000).toFixed(1)}k` : `£${v.toFixed(0)}`;
+  const allocationModel = deriveCurrencyAllocation(
+    summary?.currency_allocation,
+    !isShowingSamples && !isMissingTradeHistory,
+  );
+  const {
+    hasAllocation,
+    slices: currencySlices,
+    unclassifiedGbp,
+    hasUnclassified,
+    pct: allocationPct,
+  } = allocationModel;
 
   return (
     <div className="space-y-space-lg pb-16">
@@ -1084,103 +1075,11 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
               <span className="font-label-caps text-label-caps text-outline">SPOT FX</span>
             </div>
 
-            {/* SVG Donut Chart */}
-            <div className="flex items-center justify-center py-4">
-              {isMissingTradeHistory || !hasAllocation ? (
-                <div className="flex flex-col items-center justify-center h-40 text-center text-outline">
-                  <span className="material-symbols-outlined text-3xl mb-1 text-outline/50">pie_chart</span>
-                  <span className="font-mono text-xs">
-                    {isMissingTradeHistory ? 'Awaiting Trade History' : 'Allocation unavailable'}
-                  </span>
-                  <span className="text-[10px] text-outline/60 mt-0.5">
-                    {isMissingTradeHistory
-                      ? 'No holdings to allocate'
-                      : isShowingSamples
-                        ? 'Not calculated for sample data'
-                        : 'No priced holdings to allocate'}
-                  </span>
-                </div>
-              ) : (
-                <div className="relative w-40 h-40">
-                  <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                    {/* Background Track */}
-                    <path
-                      className="text-surface-container-highest"
-                      strokeWidth="4.5"
-                      stroke="currentColor"
-                      fill="none"
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    />
-                    {currencySlices.map((s, i) => {
-                      const offset = currencySlices
-                        .slice(0, i)
-                        .reduce((acc, prev) => acc + allocationPct(prev.gbp), 0);
-                      return (
-                        <path
-                          key={s.code}
-                          className={s.text}
-                          strokeDasharray={`${allocationPct(s.gbp).toFixed(2)}, 100`}
-                          strokeDashoffset={(-offset).toFixed(2)}
-                          strokeWidth="4.5"
-                          strokeLinecap="round"
-                          stroke="currentColor"
-                          fill="none"
-                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                        />
-                      );
-                    })}
-                  </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                    <span className="font-data-mono-lg text-data-mono-lg font-bold text-on-surface">
-                      {compactGbp(allocationTotal)}
-                    </span>
-                    <span className="font-label-caps text-[9px] text-outline uppercase">
-                      {classifiedPct.toFixed(0)}% Allocated
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Currency Breakdown Legend */}
-            {isMissingTradeHistory || !hasAllocation ? (
-              <div className="p-3 text-center text-outline font-mono text-xs bg-surface-container-lowest rounded border border-surface-container/30">
-                {isMissingTradeHistory ? 'Awaiting TradeHistory*.csv' : 'No currency breakdown available'}
-              </div>
-            ) : (
-              <div className="space-y-2 mt-2">
-                {currencySlices.map((s) => (
-                  <div
-                    key={s.code}
-                    className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className={`w-2.5 h-2.5 rounded-full ${s.dot}`} />
-                      <span className="font-body-sm text-xs text-on-surface font-medium">{s.label}</span>
-                    </div>
-                    <span className="font-data-mono-sm text-xs text-on-surface">
-                      {allocationPct(s.gbp).toFixed(1)}% • {compactGbp(s.gbp)}
-                    </span>
-                  </div>
-                ))}
-                {hasUnclassified && (
-                  <div className="flex items-center justify-between p-2 rounded bg-surface-container-lowest border border-surface-container/30">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2.5 h-2.5 rounded-full bg-outline" />
-                      <span
-                        className="font-body-sm text-xs text-on-surface-variant font-medium"
-                        title="Holdings whose statement currency is not USD, GBP or EUR"
-                      >
-                        Other currencies
-                      </span>
-                    </div>
-                    <span className="font-data-mono-sm text-xs text-on-surface-variant">
-                      {allocationPct(unclassifiedGbp).toFixed(1)}% • {compactGbp(unclassifiedGbp)}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
+            <CurrencyBreakdownPie
+              model={allocationModel}
+              isMissingTradeHistory={isMissingTradeHistory}
+              isShowingSamples={isShowingSamples}
+            />
           </div>
 
           <div className="mt-4 pt-3 border-t border-surface-container/40 text-[11px] text-outline font-mono flex items-center justify-between">
