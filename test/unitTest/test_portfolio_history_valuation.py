@@ -221,5 +221,49 @@ class TestSharedCacheFile(HistoryCase):
         self.assertTrue(res["data_quality"]["degraded"])
 
 
+class TestDefaultAccount(HistoryCase):
+    """KAN-46: no aggregate and no hard-coded id, so the landing view is the richest series."""
+
+    def test_the_account_with_the_most_values_wins(self):
+        history_service._merge_and_write("QX2B3", {"2019-05-01": 1.0, "2019-05-02": 2.0})
+        history_service._merge_and_write("QRPOL", {"2019-05-01": 9.0})
+        self.assertEqual(history_service.default_account(), "QX2B3")
+
+    def test_a_tie_breaks_on_name_so_the_landing_view_is_stable(self):
+        history_service._merge_and_write("BBB", {"2019-05-01": 1.0})
+        history_service._merge_and_write("AAA", {"2019-05-01": 1.0})
+        self.assertEqual(history_service.default_account(), "AAA")
+
+    def test_an_empty_store_has_no_default(self):
+        self.assertFalse(os.path.exists(settings.PORTFOLIO_VALUES_FILE))
+        self.assertIsNone(history_service.default_account())
+
+
+class TestIsBehind(unittest.TestCase):
+    """Only a tail counts as fillable. Interior misses in the real file are market holidays."""
+
+    @staticmethod
+    def series(*dates):
+        return [{"date": d, "value": 1.0} for d in dates]
+
+    def test_a_series_ending_today_is_not_behind(self):
+        self.assertFalse(history_service.is_behind(self.series("2026-11-20"), today="2026-11-20"))
+
+    def test_a_series_stopping_before_today_is_behind(self):
+        self.assertTrue(history_service.is_behind(self.series("2026-11-18"), today="2026-11-20"))
+
+    def test_an_interior_holiday_is_not_a_gap(self):
+        # 2026-01-01 missing between two stored days must not offer a recompute.
+        points = self.series("2025-12-31", "2026-01-02")
+        self.assertFalse(history_service.is_behind(points, today="2026-01-02"))
+
+    def test_a_weekend_does_not_make_friday_stale(self):
+        # Friday 2026-11-20 stored, "today" Sunday 2026-11-22: no business day was missed.
+        self.assertFalse(history_service.is_behind(self.series("2026-11-20"), today="2026-11-22"))
+
+    def test_an_empty_series_is_behind_so_a_new_user_can_compute_one(self):
+        self.assertTrue(history_service.is_behind([], today="2026-11-20"))
+
+
 if __name__ == "__main__":
     unittest.main()

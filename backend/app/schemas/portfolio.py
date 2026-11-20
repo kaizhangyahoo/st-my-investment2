@@ -78,9 +78,11 @@ class PortfolioHistoryResponse(BaseModel):
     points: List[PortfolioHistoryPoint]
     computed_at: str
     data_quality: HistoryDataQuality
-    # Account keys stored in user_portfolio_values.json; `account_id` is None for the total.
+    # Account keys stored in user_portfolio_values.json; `account_id` is the one returned.
     accounts: List[str] = []
     account_id: Optional[str] = None
+    # Whether recomputing could add dates to this account, i.e. whether to offer it at all.
+    fillable_gap: bool = False
 
 class BenchmarkPoint(BaseModel):
     date: str
