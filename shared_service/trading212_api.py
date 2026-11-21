@@ -121,6 +121,34 @@ class Trading212API:
 
 
     # ==========================================
+    # 2b. Instrument Metadata
+    # ==========================================
+
+    def get_instruments(self) -> Any:
+        """
+        Every tradable instrument on the platform.
+        Endpoint: GET /api/v0/equity/metadata/instruments
+        Rate limit: 1 req / 50s
+
+        The only way to get an instrument's exchange symbol: the `ticker` used everywhere else
+        is a platform id that can disagree with it entirely -- `ALCC1_US_EQ` has shortName
+        `OKLO`, because the id keeps the pre-merger identity.
+        """
+        return self._get("/api/v0/equity/metadata/instruments")
+
+    def get_exchanges(self) -> Any:
+        """
+        Exchanges and their working schedules.
+        Endpoint: GET /api/v0/equity/metadata/exchanges
+        Rate limit: 1 req / 30s
+
+        Needed to place an instrument: `workingScheduleId` is the only link from an instrument
+        to its exchange, and the ticker suffix does not carry it (`CNX1_EQ` is LSE-listed).
+        """
+        return self._get("/api/v0/equity/metadata/exchanges")
+
+
+    # ==========================================
     # 3. History & Reporting
     # ==========================================
 

@@ -94,8 +94,12 @@ export const apiErrorMessage = (err: any, fallback: string): string => {
 export const t212Api = {
   getOverview: async (key?: string, secret?: string) => 
     (await api.get('/trading212/overview', { headers: { 'x-t212-key': key, 'x-t212-secret': secret } })).data,
-  getPositions: async (key?: string, secret?: string) => 
+  getPositions: async (key?: string, secret?: string) =>
     (await api.get('/trading212/positions', { headers: { 'x-t212-key': key, 'x-t212-secret': secret } })).data,
+  getOrders: async (key?: string, secret?: string) =>
+    (await api.get('/trading212/orders', { headers: { 'x-t212-key': key, 'x-t212-secret': secret } })).data,
+  getDividends: async (key?: string, secret?: string) =>
+    (await api.get('/trading212/dividends', { headers: { 'x-t212-key': key, 'x-t212-secret': secret } })).data,
 };
 
 export default api;

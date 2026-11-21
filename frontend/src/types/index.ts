@@ -197,6 +197,7 @@ export interface T212AccountSummary {
 
 export interface T212Position {
   ticker: string;
+  symbol?: string | null;
   name: string;
   isin: string;
   currency: string;
@@ -207,5 +208,49 @@ export interface T212Position {
   current_value_gbp: number;
   unrealized_pnl_gbp: number;
   fx_impact_gbp: number;
+}
+
+// Fill-derived fields are nullable: most orders in a real account are rejected or cancelled and
+// carry no fill, so `null` means "never executed" rather than "executed at zero".
+export interface T212Order {
+  // One row is one fill, so `id` repeats across the tranches of a part-filled order and only
+  // `fill_id` is unique. It is null for an order that never executed.
+  id: string;
+  fill_id: string | null;
+  created_at: string | null;
+  filled_at: string | null;
+  ticker: string;
+  symbol: string | null;
+  name: string;
+  side: string;
+  type: string;
+  status: string;
+  quantity: number | null;
+  filled_quantity: number | null;
+  fill_price: number | null;
+  fill_type: string | null;
+  currency: string;
+  fees: number | null;
+  net_value: number | null;
+  net_currency: string | null;
+  fx_rate: number | null;
+}
+
+export interface T212Dividend {
+  paid_on: string | null;
+  ticker: string;
+  symbol: string | null;
+  name: string;
+  quantity: number;
+  gross_per_share: number;
+  instrument_currency: string;
+  amount: number;
+  currency: string;
+  type: string;
+}
+
+export interface T212Page<T> {
+  items: T[];
+  truncated: boolean;
 }
 
