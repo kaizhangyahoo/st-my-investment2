@@ -2,7 +2,7 @@ import pandas as pd
 import requests
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-from backend.app.core.cache import ttl_cache
+from backend.app.core.cache import MISS, cache, ttl_cache
 from backend.app.services import fx_store
 from backend.app.services.price_service import get_prices, fetch_yahoo_history
 
@@ -15,22 +15,51 @@ _FALLBACK_GBPUSD = 1.25
 _FALLBACK_GBPEUR = 1.15
 
 
-def _priced_anything(result: Tuple[Dict[str, Optional[float]], List[Dict[str, str]]]) -> bool:
-    """A total outage prices nothing, and caching that leaves the portfolio blank for an hour.
+_PRICE_TTL = 3600
 
-    A *partial* result is still cached, because requiring every ticker would mean one
-    permanently delisted holding re-fetched the whole portfolio on every request. The cost of
-    that choice is that one ticker's transient failure is still pinned for the TTL; fixing
-    that needs a per-ticker cache rather than a per-call one.
+
+def _price_key(ticker: str) -> Tuple[str, str]:
+    """Namespaced so it cannot collide with `ttl_cache`'s own 3-tuple keys in the same store."""
+    return ("current_price", ticker)
+
+
+def get_current_prices(
+    tickers: List[str],
+) -> Tuple[Dict[str, Optional[float]], List[Dict[str, str]]]:
+    """Current prices for `tickers`, plus the failures recorded while fetching them.
+
+    Cached one ticker at a time rather than per call. A key built from the whole requested list
+    stored one ticker's transient failure beside thirty good prices and served the lot for the
+    rest of the hour, with nothing in `backend/` able to clear it; it also meant any change to
+    the position set -- one new trade, one position closed -- discarded every price at once, and
+    let an arbitrary ticker list grow the key space one entry per permutation (KAN-54).
+
+    Only successful prices are stored, so an unpriced ticker leaves its key free and the next
+    request retries just that one. Failures therefore always describe this request's own
+    attempts: a cache hit contributes none, which is what stops `data_quality.failures` from
+    reporting a provider error that happened an hour ago.
     """
-    prices, _failures = result
-    return any(price is not None for price in prices.values())
+    requested = list(dict.fromkeys(tickers))
+    cached: Dict[str, float] = {}
+    uncached: List[str] = []
+    for ticker in requested:
+        price = cache.get(_price_key(ticker), MISS)
+        if price is MISS:
+            uncached.append(ticker)
+        else:
+            cached[ticker] = price
 
+    if not uncached:
+        return dict(cached), []
 
-@ttl_cache(ttl=3600, cache_if=_priced_anything)
-def get_current_prices(tickers: List[str]) -> Tuple[Dict[str, Optional[float]], List[Dict[str, str]]]:
-    """Price map plus per-provider failure records. Cached as a pair so a cache hit keeps both."""
-    return get_prices(tickers)
+    # One call for the whole uncached subset, so `get_prices` keeps its thread pool and
+    # TwelveData still batches 8 symbols per request instead of one request per ticker.
+    fetched, failures = get_prices(uncached)
+    for ticker, price in fetched.items():
+        if price is not None:
+            cache.set(_price_key(ticker), price, ttl=_PRICE_TTL)
+
+    return {t: fetched.get(t, cached.get(t)) for t in requested}, failures
 
 def _rate_map(rows: pd.DataFrame) -> Dict[str, float]:
     """A Yahoo history frame as `{"YYYY-MM-DD": rate}`, which is what the store speaks."""

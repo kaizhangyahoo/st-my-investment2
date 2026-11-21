@@ -10,8 +10,8 @@ import requests
 
 from backend.app.core.cache import cache
 from backend.app.core.config import settings
-from backend.app.services import market_service, price_service
-from test.support.portfolio import fx_frame, temp_fx_store
+from backend.app.services import market_service, portfolio_engine, price_service
+from test.support.portfolio import TempMappingCase, fx_frame, temp_fx_store, trade_df
 from test.support.stubs import response, session_stub, yahoo_history, yahoo_quote
 
 
@@ -141,6 +141,178 @@ class TestTransientFailureIsNotPinned(unittest.TestCase):
 
         _result, second = self.call(fetch, None)
         self.assertEqual(second, [], "an empty-but-successful answer was re-fetched")
+
+
+class TestPricesAreCachedPerTicker(unittest.TestCase):
+    """KAN-54: one ticker's blip must not take the rest of the portfolio down with it.
+
+    `get_current_prices` was memoised on the whole requested list, so a single transient
+    failure was stored beside thirty good prices and served for the rest of the TTL, and any
+    change to the position set discarded prices that were still perfectly valid.
+
+    Driven through the stubbed session rather than by patching the fetchers, because the
+    assertion is about which tickers are *contacted*: a `yahoo=None` stub raises
+    AssertionError -- which no production `except` clause catches -- if a cached price is
+    re-fetched, and a missing retry shows up as an absent URL.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    @staticmethod
+    def quotes(priced):
+        """Yahoo handler pricing the tickers in `priced`; anything else is unreachable."""
+        def yahoo(url, kw):
+            for ticker, price in priced.items():
+                if ticker in url:
+                    return response(payload=yahoo_quote(price))
+            raise requests.RequestException("connection reset")
+        return yahoo
+
+    def fetch(self, tickers, yahoo, twelvedata=None, key=None):
+        session, calls = session_stub(yahoo=yahoo, twelvedata=twelvedata)
+        with patch.object(price_service, "_session", session), \
+                patch.object(settings, "EODHD_API_TOKEN", None), \
+                patch.object(settings, "TWELVEDATA_API_KEY", key):
+            return market_service.get_current_prices(tickers), calls
+
+    def contacted(self, calls, ticker):
+        return [url for url in calls if ticker in url]
+
+    def test_a_failed_ticker_is_retried_while_the_others_stay_cached(self):
+        # The whole defect in one test: NVDA blips, AAPL and MSFT do not, and the next request
+        # must re-contact NVDA *only*.
+        (prices, _f), first = self.fetch(
+            ["AAPL", "MSFT", "NVDA"], self.quotes({"AAPL": 200.0, "MSFT": 400.0})
+        )
+        self.assertEqual(len(first), 3)
+        self.assertIsNone(prices["NVDA"])
+
+        (prices, _f), retry = self.fetch(
+            ["AAPL", "MSFT", "NVDA"], self.quotes({"AAPL": 999.0, "MSFT": 999.0, "NVDA": 500.0})
+        )
+
+        self.assertEqual(len(retry), 1, "the blip was cached, so NVDA was never retried")
+        self.assertTrue(self.contacted(retry, "NVDA"))
+        self.assertEqual(prices["NVDA"], 500.0)
+        # Served from cache, so the 999.0 the stub now offers must not reach the caller.
+        self.assertEqual(prices["AAPL"], 200.0)
+        self.assertEqual(prices["MSFT"], 400.0)
+
+    def test_a_cached_price_is_not_refetched(self):
+        # Without this the TTL buys nothing and Yahoo starts 429ing, which is the whole reason
+        # the cache exists.
+        self.fetch(["AAPL"], self.quotes({"AAPL": 200.0}))
+
+        (prices, failures), second = self.fetch(["AAPL"], None)
+
+        self.assertEqual(second, [], "a cached price was re-fetched")
+        self.assertEqual(prices["AAPL"], 200.0)
+        self.assertEqual(failures, [])
+
+    def test_reordering_the_list_reuses_every_cached_price(self):
+        # `/market-data/quotes?tickers=A,B` and `?tickers=B,A` were separate keys, each
+        # re-fetching both tickers.
+        self.fetch(["AAPL", "MSFT"], self.quotes({"AAPL": 200.0, "MSFT": 400.0}))
+
+        (prices, _f), second = self.fetch(["MSFT", "AAPL"], None)
+
+        self.assertEqual(second, [], "reordering the list re-fetched prices already held")
+        self.assertEqual(prices, {"MSFT": 400.0, "AAPL": 200.0})
+
+    def test_adding_one_position_fetches_only_that_position(self):
+        # `calculate_positions_from_df` drops positions that net to zero, so one new trade used
+        # to change the key and invalidate the prices for the entire portfolio.
+        self.fetch(["AAPL", "MSFT"], self.quotes({"AAPL": 200.0, "MSFT": 400.0}))
+
+        (prices, _f), second = self.fetch(
+            ["AAPL", "MSFT", "NVDA"], self.quotes({"NVDA": 500.0})
+        )
+
+        self.assertEqual(len(second), 1, "adding one ticker re-fetched the ones already cached")
+        self.assertTrue(self.contacted(second, "NVDA"))
+        self.assertEqual(prices, {"AAPL": 200.0, "MSFT": 400.0, "NVDA": 500.0})
+
+    def test_failures_describe_this_request_not_a_cached_one(self):
+        (prices, failures), _ = self.fetch(
+            ["AAPL", "NVDA"], self.quotes({"AAPL": 200.0})
+        )
+        self.assertEqual({f["ticker"] for f in failures}, {"NVDA"})
+        self.assertEqual(set(prices), {"AAPL", "NVDA"}, "every requested ticker needs a key")
+        self.assertIsNone(prices["NVDA"])
+
+        (_p, failures), _ = self.fetch(
+            ["AAPL", "NVDA"], self.quotes({"AAPL": 200.0, "NVDA": 500.0})
+        )
+
+        # AAPL is cached and so attempted nothing; NVDA succeeded. A stale record here would
+        # light up data_quality.failures for a provider error that is an hour old.
+        self.assertEqual(failures, [])
+
+    def test_the_uncached_subset_goes_through_as_one_batch(self):
+        # Per-ticker caching must not become a per-ticker *fetch*: TwelveData batches 8 symbols
+        # per request, so three Yahoo misses belong in one call, not three.
+        batch = {t: {"close": "10.0"} for t in ("AAPL", "MSFT", "NVDA")}
+        (prices, _f), calls = self.fetch(
+            ["AAPL", "MSFT", "NVDA"],
+            self.quotes({}),
+            twelvedata=lambda url, kw: response(payload=batch),
+            key="fake-key",
+        )
+
+        twelvedata_calls = [url for url in calls if "twelvedata" in url]
+        self.assertEqual(len(twelvedata_calls), 1, "the batch was split into one call per ticker")
+        self.assertEqual(prices, {"AAPL": 10.0, "MSFT": 10.0, "NVDA": 10.0})
+
+
+class TestTheTotalRecoversWithTheProvider(TempMappingCase):
+    """KAN-54's headline symptom: the understated total must not outlive the blip.
+
+    The market_service tests above prove the price is re-fetched; this proves what the user
+    actually sees, because an unpriced ticker is coerced to 0 and silently contributes nothing
+    to `total_market_value_gbp`.
+    """
+
+    MAPPINGS = {"Apple Inc": "AAPL", "Bogus Ltd": "BOGUS.L"}
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.addCleanup(cache.clear)
+        temp_fx_store(self)
+
+    def value(self, blip):
+        def yahoo(url, kw):
+            if "GBP" in url:  # the FX crosses, fetched as history rather than as a quote
+                return response(payload=yahoo_history(closes=(1.29 if "GBPUSD" in url else 1.15,)))
+            if blip and "AAPL" in url:
+                raise requests.RequestException("connection reset")
+            is_aapl = "AAPL" in url
+            return response(payload=yahoo_quote(
+                200.0 if is_aapl else 700.0, currency="USD" if is_aapl else "GBp"
+            ))
+
+        session, calls = session_stub(yahoo=yahoo)
+        with patch.object(price_service, "_session", session), \
+                patch.object(settings, "EODHD_API_TOKEN", None), \
+                patch.object(settings, "TWELVEDATA_API_KEY", None):
+            result = portfolio_engine.calculate_positions_from_df(trade_df())
+        return result, [u for u in calls if "GBP" not in u]
+
+    def test_the_next_request_restores_the_total_and_refetches_only_the_blip(self):
+        blipped, _ = self.value(blip=True)
+        self.assertEqual(blipped["data_quality"]["unpriced_tickers"], ["AAPL"])
+
+        recovered, contacted = self.value(blip=False)
+
+        self.assertEqual(recovered["data_quality"]["unpriced_tickers"], [])
+        self.assertGreater(recovered["total_market_value_gbp"], blipped["total_market_value_gbp"])
+        self.assertAlmostEqual(recovered["total_market_value_gbp"], 1606.39, places=2)
+        self.assertEqual(
+            [u for u in contacted if "AAPL" not in u], [],
+            "BOGUS.L priced fine, so re-fetching it means the whole list was invalidated",
+        )
 
 
 class TestFxFallback(unittest.TestCase):
