@@ -285,6 +285,22 @@ class TestBenchmarkEndpoint(MetricsCase):
         self.assertEqual(body["symbol"], "^GSPC")
         self.assertEqual(fetch.call_args.args[0], "^GSPC")
 
+    def test_a_pence_quoted_tracker_is_passed_through_unconverted(self):
+        # CNX1.L, the NASDAQ-100 comparison added in KAN-58, quotes in pence: ~112,600 against a
+        # portfolio worth ~£45,000. Scaling it here would be wrong twice over, since the client
+        # rebases onto its own opening value and that cancels the unit. The closes must arrive
+        # raw with the currency named, not silently divided into something resembling pounds.
+        pence = pd.DataFrame(
+            {
+                "Date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+                "close": [26515.0, 112600.0],
+            }
+        )
+        body, fetch = self.benchmark(closes=pence, currency="GBp", symbol="CNX1.L")
+        self.assertEqual(fetch.call_args.args[0], "CNX1.L")
+        self.assertEqual([p["value"] for p in body["points"]], [26515.0, 112600.0])
+        self.assertEqual(body["currency"], "GBp")
+
     def test_values_are_raw_closes_so_the_client_can_rebase_per_timeframe(self):
         # Rebasing here would fix the comparison to the full series and silently mis-scale
         # every shorter window, so the server must not normalise.
@@ -336,6 +352,158 @@ class TestBenchmarkSurvivesATransientOutage(MetricsCase):
         self.assertEqual(len(retried), 1, "the failure was cached, so no retry was attempted")
         self.assertEqual([p["value"] for p in body["points"]], [100.0])
         self.assertIsNone(body["unavailable_reason"])
+
+
+class TestMatchedBenchmarkEndpoint(MetricsCase):
+    """`/benchmark/matched`, the comparison line fed by the account's own deposits (KAN-58).
+
+    `/benchmark` hands the client raw closes to scale onto the curve, which silently means "one
+    lump sum on day one" and re-means itself on every timeframe. This endpoint returns absolute
+    GBP instead, so what matters here is that the deposits reaching it are the right account's and
+    that nothing is charted when they cannot be trusted.
+    """
+
+    # Two deposits and a doubling, so the expected series is checkable without a spreadsheet.
+    LEDGER = pd.DataFrame(
+        {
+            "TextDate": ["02/01/24", "03/01/24"],
+            "Summary": ["Cash In", "Cash In"],
+            "MarketName": ["Bank Deposit", "Bank Deposit"],
+            "PL Amount": ["1,000.00", "500.00"],
+            "DateUtc": ["2024-01-02T09:00:00", "2024-01-03T09:00:00"],
+            "CurrencyIsoCode": ["GBP", "GBP"],
+        }
+    )
+    LEDGER_FILE = "TransactionHistory-QX2B3-(01-11-2018)-(10-11-2026).csv"
+    CLOSES = pd.DataFrame(
+        {"Date": pd.to_datetime(["2024-01-02", "2024-01-03"]), "close": [100.0, 200.0]}
+    )
+
+    # Distinct from None and from "", both of which are cases under test.
+    DEFAULT = object()
+
+    def matched(self, ledger=DEFAULT, filename=DEFAULT, currency="GBP", closes=None, **params):
+        from backend.app.api.v1 import portfolio as portfolio_api
+
+        df = self.LEDGER if ledger is self.DEFAULT else ledger
+        source = self.LEDGER_FILE if filename is self.DEFAULT else filename
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    portfolio_api,
+                    "get_or_load_transaction_df",
+                    lambda _user_id: (df, source),
+                )
+            )
+            fetch = stack.enter_context(
+                patch(
+                    "backend.app.api.v1.portfolio.get_price_history",
+                    return_value=(self.CLOSES if closes is None else closes, currency),
+                )
+            )
+            body = self.get("benchmark/matched", **params)
+        return body, fetch
+
+    def test_each_deposit_buys_at_its_own_close(self):
+        body, _ = self.matched()
+        # 1000 / 100 = 10 units, then 500 / 200 = 2.5 more: 12.5 x 200 = 2500. A lump sum would
+        # have given 1500 x 2 = 3000, which is the comparison this replaces.
+        self.assertEqual(
+            [(p["date"], p["value"]) for p in body["points"]],
+            [("2024-01-02", 1000.0), ("2024-01-03", 2500.0)],
+        )
+        self.assertIsNone(body["unavailable_reason"])
+
+    def test_it_reports_what_it_was_fed_so_the_caption_can_say_so(self):
+        body, _ = self.matched()
+        self.assertEqual(body["deposits_matched"], 2)
+        self.assertEqual(body["total_deposited_gbp"], 1500.0)
+        self.assertEqual(body["first_deposit"], "2024-01-02")
+
+    def test_the_values_are_absolute_gbp_and_not_rebased_onto_the_curve(self):
+        # The stored series opens at 100.0. A first point of 100.0 here would mean the server had
+        # scaled the line onto the curve, which is the fault being removed -- it must be the
+        # deposit's own 1000.0.
+        body, _ = self.matched()
+        self.assertEqual(body["points"][0]["value"], 1000.0)
+        self.assertEqual(self.get("history")["points"][0]["value"], 100.0)
+
+    def test_closes_are_fetched_from_the_first_deposit_not_the_chart_window(self):
+        # Fetching from a later window start would lose the units the early deposits bought, and
+        # the line would begin partway up with no explanation.
+        _, fetch = self.matched()
+        self.assertEqual(fetch.call_args.args[1], "2024-01-02")
+
+    def test_a_pence_quoted_tracker_lands_on_the_same_scale_as_a_pound_quoted_one(self):
+        pence = pd.DataFrame(
+            {"Date": pd.to_datetime(["2024-01-02", "2024-01-03"]), "close": [10000.0, 20000.0]}
+        )
+        body, _ = self.matched(closes=pence, currency="GBp", symbol="CNX1.L")
+        self.assertEqual(body["symbol"], "CNX1.L")
+        self.assertEqual([p["value"] for p in body["points"]], [1000.0, 2500.0])
+
+    def test_another_accounts_statement_is_not_charted_against_this_curve(self):
+        # QRPOL has its own stored series, and QX2B3's deposits are not its contributions. Drawing
+        # them would be wrong by the whole difference between two accounts, silently.
+        body, _ = self.matched(account_id="QRPOL")
+        self.assertEqual(body["points"], [])
+        self.assertIn("QRPOL", body["unavailable_reason"])
+        self.assertIn(self.LEDGER_FILE, body["unavailable_reason"])
+
+    def test_an_upload_that_does_not_name_an_account_is_refused(self):
+        # Without the account in the filename there is no way to confirm the deposits belong to
+        # the series being drawn, and guessing favours a wrong line over no line.
+        body, _ = self.matched(filename="")
+        self.assertEqual(body["points"], [])
+        self.assertIn("QX2B3", body["unavailable_reason"])
+
+    def test_a_partial_export_yields_no_line_and_says_why(self):
+        # The founding deposit is missing, so the running balance goes negative. Understated
+        # deposits would make the index look beaten, which is the flattering direction.
+        partial = pd.DataFrame(
+            {
+                "TextDate": ["02/01/24"],
+                "Summary": ["Client Consideration"],
+                "MarketName": ["Lam Research Corp CONS 2@100"],
+                "PL Amount": ["-2,000.00"],
+                "DateUtc": ["2024-01-02T09:00:00"],
+                "CurrencyIsoCode": ["GBP"],
+            }
+        )
+        body, _ = self.matched(ledger=partial)
+        self.assertEqual(body["points"], [])
+        self.assertIn("starts after the account did", body["unavailable_reason"])
+
+    def test_a_statement_with_no_deposits_yields_no_line_and_says_why(self):
+        none_external = self.LEDGER.assign(Summary=["Dividend", "Dividend"])
+        body, _ = self.matched(ledger=none_external)
+        self.assertEqual(body["points"], [])
+        self.assertIn("No deposits found", body["unavailable_reason"])
+
+    def test_no_statement_at_all_yields_no_line_and_says_why(self):
+        body, _ = self.matched(ledger=None)
+        self.assertEqual(body["points"], [])
+        self.assertIn("No transaction statement", body["unavailable_reason"])
+
+    def test_an_unreachable_provider_yields_no_line_and_says_why(self):
+        body, _ = self.matched(closes=pd.DataFrame(columns=["Date", "close"]), currency=None)
+        self.assertEqual(body["points"], [])
+        self.assertIn("VUSA.L", body["unavailable_reason"])
+
+    def test_a_usd_quoted_index_is_refused_rather_than_compared_without_fx(self):
+        body, _ = self.matched(currency="USD", symbol="^GSPC")
+        self.assertEqual(body["points"], [])
+        self.assertIn("FX", body["unavailable_reason"])
+
+    def test_the_lump_sum_endpoint_is_untouched_by_any_of_this(self):
+        # `/benchmark` still returns raw closes for callers that rebase. Changing it would have
+        # broken the meaning of a field rather than adding one.
+        with patch(
+            "backend.app.api.v1.portfolio.get_price_history",
+            return_value=(BENCHMARK_CLOSES, "GBP"),
+        ):
+            body = self.get("benchmark")
+        self.assertEqual(body["points"][0]["value"], 90.0)
 
 
 if __name__ == "__main__":

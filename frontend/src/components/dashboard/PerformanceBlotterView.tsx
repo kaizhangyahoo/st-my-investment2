@@ -1,16 +1,34 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { portfolioApi } from '../../services/api';
 import {
-  BenchmarkResponse,
   FeedState,
+  MatchedBenchmarkResponse,
   PortfolioHistoryResponse,
   PortfolioMetricsResponse,
   RealisedMetrics,
   RiskMetrics,
 } from '../../types';
-import { EquityCurveChart } from './EquityCurveChart';
+import { BenchmarkOverlay, EquityCurveChart } from './EquityCurveChart';
 
 type Timeframe = '1M' | '3M' | '6M' | '1Y' | 'ALL';
+
+/**
+ * The comparison lines offered on the equity curve, each fetched only once enabled.
+ *
+ * Both are GBP-quoted LSE trackers rather than the indices themselves (`^GSPC`, `^NDX`), because
+ * this portfolio holds mostly USD assets valued in GBP, so its curve already carries GBP/USD; a
+ * USD-quoted index would strip that from one side of the comparison only. Over 2018-2026 the
+ * NASDAQ-100 compounds x3.84 in USD against x4.25 for the tracker -- a 10.5% divergence that is
+ * pure currency drift, and wider still at the 2022 trough.
+ */
+const BENCHMARKS = [
+  { symbol: 'VUSA.L', label: 'S&P 500', colour: '#64B5F6' },
+  { symbol: 'CNX1.L', label: 'NASDAQ 100', colour: '#B388FF' },
+];
+
+// A response describes one symbol bought with one account's deposits, so both belong in the key.
+// Keying on the symbol alone would show the previous account's line after a switch.
+const seriesKey = (symbol: string, account?: string | null) => `${symbol}@${account ?? ''}`;
 
 const TIMEFRAME_MONTHS: Record<Exclude<Timeframe, 'ALL'>, number> = {
   '1M': 1,
@@ -77,9 +95,13 @@ const MetricTile: React.FC<{
 export const PerformanceBlotterView: React.FC = () => {
   const [response, setResponse] = useState<PortfolioHistoryResponse | null>(null);
   const [metrics, setMetrics] = useState<PortfolioMetricsResponse | null>(null);
-  const [benchmark, setBenchmark] = useState<BenchmarkResponse | null>(null);
-  const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
-  const [showBenchmark, setShowBenchmark] = useState(false);
+  // Responses and errors are keyed by `seriesKey` so a line fetched for one account is never
+  // shown against another's curve; they outlive their toggle, so switching a line back on costs
+  // no second request. The toggles themselves are keyed by symbol alone: a chosen comparison
+  // should survive an account switch.
+  const [benchmarkData, setBenchmarkData] = useState<Record<string, MatchedBenchmarkResponse>>({});
+  const [benchmarkErrors, setBenchmarkErrors] = useState<Record<string, string>>({});
+  const [shownBenchmarks, setShownBenchmarks] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<{ state: FeedState; detail: string[] }>({
     state: 'loading',
     detail: [],
@@ -161,24 +183,42 @@ export const PerformanceBlotterView: React.FC = () => {
     return points.filter((p) => new Date(p.date) >= cutoff);
   }, [points, timeframe, stats]);
 
+  // `benchmarkErrors` is deliberately neither a dependency nor part of the guard: recording a
+  // failure must not re-trigger the effect that recorded it. A failed symbol therefore retries
+  // when the user toggles it off and on again, which is the only retry worth offering.
   useEffect(() => {
-    if (!showBenchmark || benchmark || points.length === 0) return;
+    if (points.length === 0) return;
+    const wanted = BENCHMARKS.filter(
+      (b) => shownBenchmarks[b.symbol] && !benchmarkData[seriesKey(b.symbol, selectedAccount)],
+    );
+    if (wanted.length === 0) return;
     let cancelled = false;
-    setBenchmarkError(null);
-    portfolioApi
-      .getBenchmark(points[0].date)
-      .then((res) => {
-        if (cancelled) return;
-        setBenchmark(res);
-        if (res.unavailable_reason) setBenchmarkError(res.unavailable_reason);
-      })
-      .catch((err: any) => {
-        if (!cancelled) setBenchmarkError(err?.message ?? 'benchmark request failed');
-      });
+    setBenchmarkErrors((prev) => {
+      const next = { ...prev };
+      wanted.forEach((b) => delete next[seriesKey(b.symbol, selectedAccount)]);
+      return next;
+    });
+    wanted.forEach((b) => {
+      const key = seriesKey(b.symbol, selectedAccount);
+      portfolioApi
+        // No start date: the series begins at the account's first deposit, and the chart trims it.
+        .getMatchedBenchmark(b.symbol, selectedAccount ?? undefined)
+        .then((res) => {
+          if (cancelled) return;
+          setBenchmarkData((prev) => ({ ...prev, [key]: res }));
+          if (res.unavailable_reason) {
+            setBenchmarkErrors((prev) => ({ ...prev, [key]: res.unavailable_reason! }));
+          }
+        })
+        .catch((err: any) => {
+          if (cancelled) return;
+          setBenchmarkErrors((prev) => ({ ...prev, [key]: err?.message ?? 'request failed' }));
+        });
+    });
     return () => {
       cancelled = true;
     };
-  }, [showBenchmark, benchmark, points]);
+  }, [shownBenchmarks, benchmarkData, points, selectedAccount]);
 
   const presentation = STATUS[status.state];
   const last = visible[visible.length - 1];
@@ -201,7 +241,30 @@ export const PerformanceBlotterView: React.FC = () => {
       realised.end_date && realised.end_date !== stats?.end_date ? ` to ${realised.end_date}` : '';
     return `${realised.winning_disposals}/${realised.disposals} closed${period}, ${signed(realised.realised_pnl_gbp)}£${money(Math.abs(realised.realised_pnl_gbp))} realised${excluded}`;
   };
-  const benchmarkPoints = benchmark && benchmark.points.length > 0 ? benchmark : null;
+  // An empty series is excluded rather than passed through: `unavailable_reason` explains it in
+  // the banner, and a zero-point overlay would otherwise sit in the legend with nothing drawn.
+  // Memoised because the chart replots whenever this array's identity changes.
+  const overlays: BenchmarkOverlay[] = useMemo(
+    () =>
+      BENCHMARKS.flatMap((b) => {
+        const res = benchmarkData[seriesKey(b.symbol, selectedAccount)];
+        return shownBenchmarks[b.symbol] && res && res.points.length > 0
+          ? [{ symbol: b.symbol, label: b.label, colour: b.colour, points: res.points }]
+          : [];
+      }),
+    [benchmarkData, shownBenchmarks, selectedAccount],
+  );
+  const overlayErrors = BENCHMARKS.filter(
+    (b) => shownBenchmarks[b.symbol] && benchmarkErrors[seriesKey(b.symbol, selectedAccount)],
+  ).map(
+    (b) => `${b.label} (${b.symbol}): ${benchmarkErrors[seriesKey(b.symbol, selectedAccount)]}`,
+  );
+  // Both lines are fed the same deposits, so one drawn response describes the caption for all of
+  // them. Stated on screen because "the index instead" only means something once the reader knows
+  // which contributions were used.
+  const matched = BENCHMARKS.map((b) => benchmarkData[seriesKey(b.symbol, selectedAccount)]).find(
+    (res) => res && res.points.length > 0,
+  );
 
   return (
     <div className="space-y-space-lg pb-16">
@@ -376,21 +439,31 @@ export const PerformanceBlotterView: React.FC = () => {
               <span className="w-3 h-0.5 bg-primary" />
               PORTFOLIO VALUE
             </span>
-            <button
-              type="button"
-              onClick={() => setShowBenchmark((on) => !on)}
-              title="Overlay an S&P 500 tracker, rebased onto this portfolio's opening value"
-              className={`flex items-center gap-1.5 transition-colors ${
-                showBenchmark ? 'text-[#64B5F6]' : 'text-outline hover:text-on-surface'
-              }`}
-            >
-              <span
-                className={`w-3 border-t border-dotted ${
-                  showBenchmark ? 'border-[#64B5F6]' : 'border-outline'
-                }`}
-              />
-              S&P 500 BENCHMARK: {showBenchmark ? 'ON' : 'OFF'}
-            </button>
+            {/* Colours come from a constant, so they are applied inline: Tailwind cannot generate
+                an arbitrary-value class it never sees in the source. */}
+            {BENCHMARKS.map((b) => {
+              const on = !!shownBenchmarks[b.symbol];
+              return (
+                <button
+                  key={b.symbol}
+                  type="button"
+                  onClick={() =>
+                    setShownBenchmarks((prev) => ({ ...prev, [b.symbol]: !prev[b.symbol] }))
+                  }
+                  title={`Overlay ${b.symbol}, a GBP-quoted ${b.label} tracker bought with this account's own deposits — each one invested at the next close, so the line answers "the index instead of these contributions"`}
+                  className={`flex items-center gap-1.5 transition-colors ${
+                    on ? '' : 'text-outline hover:text-on-surface'
+                  }`}
+                  style={on ? { color: b.colour } : undefined}
+                >
+                  <span
+                    className={`w-3 border-t border-dotted ${on ? '' : 'border-outline'}`}
+                    style={on ? { borderColor: b.colour } : undefined}
+                  />
+                  {b.label}: {on ? 'ON' : 'OFF'}
+                </button>
+              );
+            })}
             {response && (
               <span className="text-outline">
                 AS OF {new Date(response.computed_at).toLocaleString()}
@@ -399,9 +472,19 @@ export const PerformanceBlotterView: React.FC = () => {
           </div>
         </div>
 
-        {benchmarkError && showBenchmark && (
+        {overlayErrors.length > 0 && (
           <p className="font-data-mono-sm text-[10px] text-error mb-space-sm">
-            Benchmark unavailable: {benchmarkError} — no comparison line is drawn.
+            Benchmark unavailable — {overlayErrors.join(' • ')}. No comparison line is drawn for
+            {overlayErrors.length > 1 ? ' those symbols' : ' that symbol'}; toggle it off and on to
+            retry.
+          </p>
+        )}
+
+        {matched && matched.total_deposited_gbp != null && (
+          <p className="font-data-mono-sm text-[10px] text-outline mb-space-sm">
+            Comparison lines buy the index with this account's {matched.deposits_matched} deposits
+            (£{money(matched.total_deposited_gbp)} from {matched.first_deposit}), each invested at
+            the next close — so they are absolute GBP, not rescaled onto the curve.
           </p>
         )}
 
@@ -426,14 +509,7 @@ export const PerformanceBlotterView: React.FC = () => {
             </div>
           ) : (
             <>
-              <EquityCurveChart
-                points={visible}
-                benchmark={
-                  showBenchmark && benchmarkPoints
-                    ? { symbol: benchmarkPoints.symbol, points: benchmarkPoints.points }
-                    : null
-                }
-              />
+              <EquityCurveChart points={visible} benchmarks={overlays} />
               <div className="flex items-center justify-between font-data-mono-sm text-[10px] text-outline pt-1">
                 <span>
                   {visible[0].date} → {last.date} • {visible.length} TRADING DAYS

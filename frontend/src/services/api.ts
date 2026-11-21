@@ -2,6 +2,7 @@ import axios from 'axios';
 import {
   BenchmarkResponse,
   CashflowItem,
+  MatchedBenchmarkResponse,
   PortfolioHistoryResponse,
   PortfolioMetricsResponse,
   PortfolioSummary,
@@ -49,8 +50,25 @@ export const portfolioApi = {
     (await api.get('/portfolio/metrics', { params: accountId ? { account_id: accountId } : {} })).data,
   // Raw index closes, not portfolio units and not normalised server-side: rebase them onto the
   // portfolio's own first visible value so the comparison holds for whichever window is shown.
-  getBenchmark: async (startDate?: string): Promise<BenchmarkResponse> =>
-    (await api.get('/portfolio/benchmark', { params: startDate ? { start_date: startDate } : {} })).data,
+  // One call per symbol; omitting `symbol` leaves the server's default in place.
+  getBenchmark: async (startDate?: string, symbol?: string): Promise<BenchmarkResponse> =>
+    (
+      await api.get('/portfolio/benchmark', {
+        params: { ...(startDate ? { start_date: startDate } : {}), ...(symbol ? { symbol } : {}) },
+      })
+    ).data,
+  // The index bought with the account's own deposits, valued in GBP. Takes no start date: the
+  // series begins at the first deposit, and trimming it to a window is the caller's job. These
+  // points are absolute, so rebasing them would undo the thing that makes them comparable.
+  getMatchedBenchmark: async (
+    symbol?: string,
+    accountId?: string,
+  ): Promise<MatchedBenchmarkResponse> =>
+    (
+      await api.get('/portfolio/benchmark/matched', {
+        params: { ...(symbol ? { symbol } : {}), ...(accountId ? { account_id: accountId } : {}) },
+      })
+    ).data,
   getWaterfall: async (): Promise<CashflowItem[]> => (await api.get('/trades/waterfall')).data,
   uploadFiles: async (files: File[]): Promise<UploadResult> => {
     const formData = new FormData();

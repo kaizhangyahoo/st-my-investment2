@@ -2,10 +2,20 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import { PortfolioHistoryPoint } from '../../types';
 
+/** One comparison line. `points` are absolute GBP values on the same scale as the portfolio --
+ *  the server has already matched them to the account's deposits -- so they are plotted as given
+ *  and must not be scaled onto the curve. */
+export interface BenchmarkOverlay {
+  symbol: string;
+  label: string;
+  colour: string;
+  points: { date: string; value: number }[];
+}
+
 interface EquityCurveChartProps {
   points: PortfolioHistoryPoint[];
-  // Raw index closes in the index's own units; rebased here onto the first portfolio value.
-  benchmark: { symbol: string; points: { date: string; value: number }[] } | null;
+  // Drawn in the order given, each trimmed to the visible window.
+  benchmarks: BenchmarkOverlay[];
 }
 
 // Two or more consecutive business days with no stored value. A single one is a market holiday
@@ -52,30 +62,41 @@ const splitOnGaps = (points: PortfolioHistoryPoint[]) => {
   return { segments, gaps };
 };
 
-/** Benchmark closes expressed as "what the portfolio's opening value would be worth". */
-const rebase = (
+/**
+ * The overlay cut down to the dates the portfolio curve covers.
+ *
+ * Only a filter -- the values are left alone. They used to be rescaled onto the portfolio's first
+ * visible value, which was the whole fault: one factor over the series means "a single lump sum
+ * invested on day one", and recomputing it per window made every timeframe measure something
+ * different. The server now matches the account's real deposits, so these are absolute GBP.
+ */
+const inWindow = (
   benchmarkPoints: { date: string; value: number }[],
   points: PortfolioHistoryPoint[],
 ) => {
   if (points.length === 0) return null;
   const from = points[0].date;
   const to = points[points.length - 1].date;
-  const inWindow = benchmarkPoints.filter((p) => p.date >= from && p.date <= to);
-  const base = inWindow.find((p) => p.value > 0);
-  if (!base) return null;
-  const scale = points[0].value / base.value;
+  const visible = benchmarkPoints.filter((p) => p.date >= from && p.date <= to);
+  if (visible.length === 0) return null;
   return {
-    x: inWindow.map((p) => p.date),
-    y: inWindow.map((p) => p.value * scale),
+    x: visible.map((p) => p.date),
+    y: visible.map((p) => p.value),
   };
 };
 
-export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ points, benchmark }) => {
+export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ points, benchmarks }) => {
   const plotRef = useRef<HTMLDivElement>(null);
   const series = useMemo(() => splitOnGaps(points), [points]);
-  const benchmarkSeries = useMemo(
-    () => (benchmark ? rebase(benchmark.points, points) : null),
-    [benchmark, points],
+  // A symbol with no closes inside the visible window is dropped here, so one unavailable
+  // comparison never suppresses the others.
+  const overlays = useMemo(
+    () =>
+      benchmarks.flatMap((benchmark) => {
+        const visible = inWindow(benchmark.points, points);
+        return visible ? [{ ...benchmark, visible }] : [];
+      }),
+    [benchmarks, points],
   );
 
   useEffect(() => {
@@ -93,21 +114,23 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ points, benc
       fillcolor: 'rgba(78, 222, 163, 0.10)',
       hovertemplate: '%{x|%Y-%m-%d}<br>£%{y:,.2f}<extra></extra>',
     }));
-    if (benchmarkSeries) {
+    overlays.forEach((overlay) => {
       data.push({
-        x: benchmarkSeries.x,
-        y: benchmarkSeries.y,
+        x: overlay.visible.x,
+        y: overlay.visible.y,
         type: 'scatter',
         mode: 'lines',
-        name: `${benchmark?.symbol} (rebased)`,
-        line: { color: '#64B5F6', width: 1.5, dash: 'dot' },
-        hovertemplate: `${benchmark?.symbol} rebased<br>%{x|%Y-%m-%d}<br>£%{y:,.2f}<extra></extra>`,
+        name: `${overlay.label} (same deposits)`,
+        line: { color: overlay.colour, width: 1.5, dash: 'dot' },
+        // `hovermode: 'x unified'` already prints the date once and the trace name per row, so
+        // the symbol is all this adds -- it ties the friendly label to the instrument fetched.
+        hovertemplate: `${overlay.symbol}<br>£%{y:,.2f}<extra></extra>`,
       });
-    }
+    });
 
     const values = [
       ...points.map((p) => p.value),
-      ...(benchmarkSeries ? benchmarkSeries.y : []),
+      ...overlays.flatMap((overlay) => overlay.visible.y),
     ];
     const lo = Math.min(...values);
     const hi = Math.max(...values);
@@ -157,7 +180,7 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ points, benc
       },
       { displayModeBar: false, responsive: true },
     );
-  }, [points, series, benchmark, benchmarkSeries]);
+  }, [points, series, overlays]);
 
   useEffect(() => {
     const el = plotRef.current;

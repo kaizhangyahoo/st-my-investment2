@@ -183,6 +183,20 @@ export interface BenchmarkResponse {
   unavailable_reason: string | null;
 }
 
+export interface MatchedBenchmarkResponse {
+  symbol: string;
+  currency: string | null;
+  // Already GBP and already comparable with the equity curve: these are the market value of
+  // index units bought with each deposit, so unlike BenchmarkResponse they must not be rebased.
+  points: { date: string; value: number }[];
+  deposits_matched: number;
+  total_deposited_gbp: number | null;
+  first_deposit: string | null;
+  // Set when the series was withheld -- unreadable or partial statement, non-GBP quote, or a
+  // statement belonging to another account. Draw nothing and show the reason.
+  unavailable_reason: string | null;
+}
+
 export interface CashflowItem {
   category: string;
   amount: number;

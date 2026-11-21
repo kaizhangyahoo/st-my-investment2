@@ -233,3 +233,67 @@ def derive_cash_balance(df_transactions: Optional[pd.DataFrame]) -> Dict[str, An
 
     return {**covered, "balance_gbp": round(float(amounts.sum()), 2)}
 
+
+# The one `Summary` category where money crosses the account boundary. Everything else in the
+# statement -- `Client Consideration`, `Dividend`, `Share Dealing Commissions`, `SDRT`, cash
+# interest -- moves cash that is already inside the account. Matching an index against those would
+# buy it with money the owner never paid in, and would double-count every dividend.
+EXTERNAL_CASH_SUMMARY = 'Cash In'
+
+def external_cashflows(df_transactions: Optional[pd.DataFrame]) -> Dict[str, Any]:
+    """Dated deposits and withdrawals from an IG transaction statement, or why they cannot be read.
+
+    This answers "when did new money arrive, and how much", which is what a benchmark needs to
+    compare like with like: a portfolio fed by years of deposits cannot be measured against a
+    single lump sum invested on day one.
+
+    Gated on `derive_cash_balance` so a statement that cannot be trusted yields no cashflows at
+    all. Its partial-export check matters more here than it does for a balance. A mid-life export
+    omits the founding deposits, and understating deposits makes the index look beaten by whatever
+    is missing -- an error biased towards flattering the portfolio, which is the kind least likely
+    to be questioned.
+
+    Amounts are returned signed, as the statement writes them, so a withdrawal sells units back.
+    """
+    balance = derive_cash_balance(df_transactions)
+    if 'withheld_reason' in balance:
+        return {"withheld_reason": balance['withheld_reason']}
+
+    if 'Summary' not in df_transactions.columns:
+        # Deposits are identified by `Summary`; without it every row is indistinguishable from a
+        # trade. That is not a statement this can read, rather than a statement with no deposits.
+        return {"withheld_reason": CASH_WITHHELD_NO_LEDGER}
+
+    # Safe to use unguarded: derive_cash_balance returned a balance, so every amount parsed and
+    # every row is dated.
+    amounts = _cash_amounts(df_transactions['PL Amount'])
+    dates = _statement_dates(df_transactions)
+
+    summaries = df_transactions['Summary']
+    blank = summaries.isna() | (summaries.astype(str).str.strip() == '')
+    market_names = (
+        df_transactions['MarketName']
+        if 'MarketName' in df_transactions.columns
+        else pd.Series('', index=df_transactions.index)
+    )
+    resolved = summaries.astype(object).copy()
+    resolved.loc[blank] = market_names[blank].map(_classify_blank_summary)
+
+    # IG leaves `Summary` blank on some deposits, so the recovery above is not cosmetic: on the
+    # reference statement it moves one `Bank Deposit` row worth GBP 24,633 into this selection,
+    # a quarter of the GBP 94,633 total.
+    external = resolved.astype(str).str.strip() == EXTERNAL_CASH_SUMMARY
+    flows = [
+        {"date": date.strftime('%Y-%m-%d'), "amount_gbp": round(float(amount), 2)}
+        for date, amount in zip(dates[external], amounts[external])
+        if round(float(amount), 2) != 0
+    ]
+    flows.sort(key=lambda flow: flow['date'])
+
+    return {
+        "cashflows": flows,
+        "total_gbp": round(sum(flow['amount_gbp'] for flow in flows), 2),
+        "covered_from": balance['covered_from'],
+        "covered_to": balance['covered_to'],
+    }
+

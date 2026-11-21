@@ -172,6 +172,28 @@ class BenchmarkResponse(BaseModel):
     # Set when the provider returned nothing. The client must draw no line at all in that case.
     unavailable_reason: Optional[str] = None
 
+class MatchedBenchmarkResponse(BaseModel):
+    """A comparison line already in GBP, because the client cannot rebase this one (KAN-58).
+
+    Separate from `BenchmarkResponse` rather than an extra field on it: there, `points` are raw
+    closes the client scales itself, and here they are absolute portfolio-comparable values. One
+    field cannot mean both without the client having to guess which it was handed.
+    """
+    symbol: str
+    currency: Optional[str] = None
+    # Market value of index units bought with each deposit, in GBP. Starts at the first deposit,
+    # not at the start of the price history.
+    points: List[BenchmarkPoint] = []
+    # How many cashflows were actually applied. Fewer than the statement holds means some fell
+    # after the last available close.
+    deposits_matched: int = 0
+    total_deposited_gbp: Optional[float] = None
+    first_deposit: Optional[str] = None
+    # Set whenever the series was withheld -- an unreadable or partial statement, a non-GBP quote,
+    # or a statement for a different account. `points` is empty in that case and the client must
+    # draw nothing rather than a line that is wrong by an unknown factor.
+    unavailable_reason: Optional[str] = None
+
 class CashflowItem(BaseModel):
     category: str
     amount: float

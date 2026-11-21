@@ -265,22 +265,36 @@ def get_portfolio_summary(user: dict = Depends(get_current_user)):
     res["cash_balance"] = derive_cash_balance(_LAST_TRANSACTION_DF.get(user_id))
     return res
 
+def get_or_load_transaction_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """Get the active transaction statement from memory or autoload the latest from ~/Downloads.
+
+    The filename is returned, not just stored, because it carries the account it was exported for
+    (`TransactionHistory-QX2B3-(...).csv`) and callers comparing it against a chosen account need
+    to read it.
+    """
+    df = _LAST_TRANSACTION_DF.get(user_id)
+    if df is not None:
+        return df, _LAST_TRANSACTION_FILENAME.get(user_id)
+
+    # After a manual upload without a transaction statement, having none is the honest answer;
+    # don't substitute a statement from ~/Downloads the user didn't choose.
+    if _USER_MANUAL_UPLOAD.get(user_id):
+        return None, None
+
+    _, latest_trans = find_latest_download_files()
+    if latest_trans and os.path.exists(latest_trans):
+        try:
+            df = pd.read_csv(latest_trans)
+            _LAST_TRANSACTION_DF[user_id] = df
+            _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
+            return df, _LAST_TRANSACTION_FILENAME[user_id]
+        except Exception:
+            pass
+    return None, None
+
 @router.get("/waterfall", response_model=List[CashflowItem])
 def get_cashflow_waterfall(user: dict = Depends(get_current_user)):
-    user_id = user.get("sub", "default")
-    df = _LAST_TRANSACTION_DF.get(user_id)
-    # After a manual upload without a transaction statement, an empty list (rendered as —) is
-    # the honest answer; don't substitute a statement from ~/Downloads the user didn't choose.
-    if df is None and not _USER_MANUAL_UPLOAD.get(user_id):
-        _, latest_trans = find_latest_download_files()
-        if latest_trans and os.path.exists(latest_trans):
-            try:
-                df = pd.read_csv(latest_trans)
-                _LAST_TRANSACTION_DF[user_id] = df
-                _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
-            except Exception:
-                pass
-
+    df, _ = get_or_load_transaction_df(user.get("sub", "default"))
     if df is None:
         return []
     return calculate_cashflow_waterfall(df)
