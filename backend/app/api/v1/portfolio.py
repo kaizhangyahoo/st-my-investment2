@@ -10,7 +10,7 @@ from backend.app.schemas.portfolio import (
     PortfolioSummary,
 )
 from backend.app.core.security import get_current_user
-from backend.app.services import history_service, risk_metrics
+from backend.app.services import history_service, realised_pnl, risk_metrics
 from backend.app.services.market_service import get_price_history
 from backend.app.api.v1.trades import get_or_load_trade_df
 
@@ -68,17 +68,42 @@ def get_metrics(
     account_id: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
-    """Risk and return statistics for one stored series, per timeframe (KAN-27).
+    """Risk, return and closed-trade statistics per timeframe (KAN-27, KAN-52).
 
     Separate from `/history` so the account's series is fetched once and the tiles can switch
     windows without another request. The account is resolved exactly as `/history` resolves it,
     so both describe the same series.
+
+    `windows` comes from the stored value series; `realised` comes from the trade statement, which
+    is the only thing that knows what a position cost. Both are keyed by timeframe, but each
+    reports its own bounds, because the two sources do not end on the same date.
     """
     key = account_id or history_service.default_account() or history_service.portfolio_key(
         user.get("sub", "default")
     )
     points = history_service.read_cached_series(key)
-    return {"account_id": key, "windows": risk_metrics.all_windows(points)}
+    df, source_file = get_or_load_trade_df(user.get("sub", "default"))
+    if df is None:
+        realised: Dict[str, Any] = realised_pnl.all_windows([])
+        coverage: Dict[str, Any] = {
+            "unavailable_reason": "No trade statement loaded, so no disposal can be priced"
+        }
+    else:
+        book = realised_pnl.compute_disposals(df)
+        realised = realised_pnl.all_windows(book["disposals"])
+        coverage = {
+            "source_file": source_file,
+            "corporate_action_rows": book["corporate_action_rows"],
+            "corporate_action_cash_gbp": book["corporate_action_cash_gbp"],
+            "excluded_disposals": book["excluded_disposals"],
+            "excluded_tickers": book["excluded_tickers"],
+        }
+    return {
+        "account_id": key,
+        "windows": risk_metrics.all_windows(points),
+        "realised": realised,
+        "realised_coverage": coverage,
+    }
 
 @router.get("/benchmark", response_model=BenchmarkResponse)
 def get_benchmark(

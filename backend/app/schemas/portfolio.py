@@ -99,10 +99,42 @@ class RiskMetrics(BaseModel):
     # against an assumed one would be a figure no fetched data backs.
     sharpe_ratio: Optional[float] = None
 
+class RealisedMetrics(BaseModel):
+    """One timeframe's closed-trade result (KAN-52).
+
+    Separate from `RiskMetrics` because it comes from the trade statement rather than the stored
+    value series, and the two end on different dates. `start_date`/`end_date` are the bounds the
+    disposals actually span, so the tile states its own period instead of the curve's."""
+    timeframe: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    disposals: int = 0
+    winning_disposals: int = 0
+    win_rate_pct: Optional[float] = None
+    realised_pnl_gbp: Optional[float] = None
+
+class RealisedCoverage(BaseModel):
+    """What the realised figures were computed from, and what they had to leave out.
+
+    `excluded_tickers` are holdings whose cost basis is not derivable from this statement -- free
+    stock from a spin-off with no parent leg -- so their disposals are omitted rather than booked
+    against zero. `corporate_action_cash_gbp` is cash from fractional entitlements, which is real
+    money but not a disposal, so it sits beside the P&L rather than inside it."""
+    source_file: Optional[str] = None
+    corporate_action_rows: int = 0
+    corporate_action_cash_gbp: float = 0.0
+    excluded_disposals: int = 0
+    excluded_tickers: List[str] = []
+    # Set when no statement is loaded. The client must render a dash, not a 0% win rate.
+    unavailable_reason: Optional[str] = None
+
 class PortfolioMetricsResponse(BaseModel):
     account_id: Optional[str] = None
     # Keyed by timeframe, so the client can switch windows without another request.
     windows: Dict[str, RiskMetrics] = {}
+    # Closed-trade results per timeframe, same keys as `windows`.
+    realised: Dict[str, RealisedMetrics] = {}
+    realised_coverage: Optional[RealisedCoverage] = None
 
 class BenchmarkPoint(BaseModel):
     date: str

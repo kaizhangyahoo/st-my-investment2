@@ -124,10 +124,37 @@ export interface RiskMetrics {
   sharpe_ratio: number | null;
 }
 
+export interface RealisedMetrics {
+  timeframe: string;
+  // The bounds the disposals actually span, which are not the value series' bounds.
+  start_date: string | null;
+  end_date: string | null;
+  disposals: number;
+  winning_disposals: number;
+  // Null when the window closed nothing. Rendering that as 0% would read as "every trade lost".
+  win_rate_pct: number | null;
+  realised_pnl_gbp: number | null;
+}
+
+export interface RealisedCoverage {
+  source_file: string | null;
+  corporate_action_rows: number;
+  // Cash from fractional entitlements: real money, but not a disposal, so it sits outside the P&L.
+  corporate_action_cash_gbp: number;
+  excluded_disposals: number;
+  // Holdings whose cost basis is not in the statement, e.g. free stock from a spin-off.
+  excluded_tickers: string[];
+  // Set when no statement is loaded; show a dash, never a 0% win rate.
+  unavailable_reason: string | null;
+}
+
 export interface PortfolioMetricsResponse {
   account_id: string | null;
   // Keyed by timeframe, so switching window costs no further request.
   windows: Record<string, RiskMetrics>;
+  // Closed-trade results, same timeframe keys as `windows` but from the trade statement.
+  realised: Record<string, RealisedMetrics>;
+  realised_coverage: RealisedCoverage | null;
 }
 
 export interface BenchmarkResponse {

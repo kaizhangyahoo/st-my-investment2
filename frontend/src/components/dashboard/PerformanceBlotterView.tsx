@@ -5,6 +5,7 @@ import {
   FeedState,
   PortfolioHistoryResponse,
   PortfolioMetricsResponse,
+  RealisedMetrics,
   RiskMetrics,
 } from '../../types';
 import { EquityCurveChart } from './EquityCurveChart';
@@ -142,6 +143,7 @@ export const PerformanceBlotterView: React.FC = () => {
   const selectedAccount = accountId ?? response?.account_id;
 
   const stats: RiskMetrics | null = metrics?.windows[timeframe] ?? null;
+  const realised: RealisedMetrics | null = metrics?.realised[timeframe] ?? null;
 
   // The backend cut the window the tiles describe, so the curve is filtered by that same
   // boundary; its own month arithmetic is only the fallback for a failed metrics request.
@@ -181,6 +183,21 @@ export const PerformanceBlotterView: React.FC = () => {
     stats?.cumulative_return_pct == null || stats.cumulative_return_pct >= 0
       ? 'text-primary'
       : 'text-error';
+  // Why there is no win rate, in the order the user can act on: no statement at all, then nothing
+  // closed in this window. Saying "0%" for either would be a measurement neither supports.
+  const coverage = metrics?.realised_coverage ?? null;
+  const winRateCaption = () => {
+    if (coverage?.unavailable_reason) return 'Upload a trade statement to measure';
+    if (realised == null || realised.realised_pnl_gbp == null) return 'No closed trades in window';
+    const excluded = coverage?.excluded_disposals
+      ? `, ${coverage.excluded_disposals} without a cost basis`
+      : '';
+    // The statement and the value series do not end on the same date, so when this window really
+    // covers a different period the tile states it rather than letting the curve's stand in.
+    const period =
+      realised.end_date && realised.end_date !== stats?.end_date ? ` to ${realised.end_date}` : '';
+    return `${realised.winning_disposals}/${realised.disposals} closed${period}, ${signed(realised.realised_pnl_gbp)}£${money(Math.abs(realised.realised_pnl_gbp))} realised${excluded}`;
+  };
   const benchmarkPoints = benchmark && benchmark.points.length > 0 ? benchmark : null;
 
   return (
@@ -280,9 +297,10 @@ export const PerformanceBlotterView: React.FC = () => {
         </ul>
       )}
 
-      {/* 2. RISK & RETURN METRICS — every figure is computed by GET /portfolio/metrics from the
-             stored series for the window shown; a null arrives as a dash, never as a zero. */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-space-sm">
+      {/* 2. RISK & RETURN METRICS — every figure is computed by GET /portfolio/metrics for the
+             window shown; a null arrives as a dash, never as a zero. The first four come from the
+             stored value series, Win Rate from the trade statement (KAN-52). */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-space-sm">
         <MetricTile
           label="Cumulative Return"
           value={percent(stats?.cumulative_return_pct ?? null)}
@@ -292,6 +310,20 @@ export const PerformanceBlotterView: React.FC = () => {
               : `${signed(stats.cumulative_return_gbp)}£${money(Math.abs(stats.cumulative_return_gbp))} over ${stats.trading_days} days`
           }
           tone={returnTone}
+        />
+        {/* Backed by per-disposal realised P&L over the statement, with corporate actions
+            classified, so a share split cannot count as a winning trade. */}
+        <MetricTile
+          label="Win Rate"
+          value={realised?.win_rate_pct == null ? '—' : `${realised.win_rate_pct.toFixed(1)}%`}
+          caption={winRateCaption()}
+          tone={
+            realised?.win_rate_pct == null
+              ? 'text-outline'
+              : realised.win_rate_pct >= 50
+                ? 'text-primary'
+                : 'text-error'
+          }
         />
         <MetricTile
           label="Max Drawdown"

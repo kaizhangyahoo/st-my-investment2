@@ -1,11 +1,13 @@
-"""/api/v1/portfolio/metrics and /benchmark through the real FastAPI app (KAN-27).
+"""/api/v1/portfolio/metrics and /benchmark through the real FastAPI app (KAN-27, KAN-52).
 
 Both endpoints exist to replace hardcoded dashboard figures, so what matters here is the
 serialised body the client actually receives -- a field dropped by `response_model` filtering is
 invisible to the type-checker and was how the last regression of this kind landed (KAN-49).
 
-`/metrics` reads the stored values only and must never reach a price provider; `/benchmark`
-does fetch, so its provider is stubbed rather than called.
+`/metrics` reads from two sources and must reach neither the filesystem nor a provider: the stored
+value series, stubbed to a temp file, and the trade statement, which the live endpoint autoloads
+from `~/Downloads` and which is therefore stubbed outright. `/benchmark` does fetch, so its
+provider is stubbed rather than called.
 """
 import json
 import os
@@ -42,6 +44,23 @@ BENCHMARK_CLOSES = pd.DataFrame(
     }
 )
 
+# The Schroders history from the real statement: one buy, a zero-cash split restating 100 shares as
+# 585, a 13.29 fractional cash-out, a second buy, and the 2026 delisting paying 5310 for all 900.
+# Realised P&L is 409.98 and anything else means the corporate actions were mis-read (KAN-52).
+TRADE_COLUMNS = ["TextDate", "Time", "Activity", "Market", "Quantity", "Price", "Cost/Proceeds"]
+TRADE_ROWS = [
+    ("19-10-2026", "05:08:18", "CORPORATE ACTION", "Schroders PLC", -900.00, 590.00, 5310.00),
+    ("30-08-2023", "09:20:43", "TRADE", "Schroders PLC", 315.00, 418.00, -1331.28),
+    ("01-11-2022", "11:27:10", "CORPORATE ACTION", "Schroders PLC", -0.64, 2077.25, 13.29),
+    ("01-11-2022", "11:27:10", "CORPORATE ACTION", "Schroders PLC", 0.64, 0.00, 0.00),
+    ("20-09-2022", "07:32:08", "CORPORATE ACTION", "Schroders PLC", 585.00, 0.00, 0.00),
+    ("20-09-2022", "07:30:49", "CORPORATE ACTION", "Schroders PLC", -117.00, 0.00, 0.00),
+    ("20-09-2022", "06:23:52", "CORPORATE ACTION", "Schroders PLC", 17.00, 0.00, 0.00),
+    ("21-05-2021", "15:37:09", "TRADE", "Schroders PLC", 100.00, 3548.00, -3568.74),
+]
+TICKER_MAP = {"Schroders PLC": "SDR.L"}
+SOURCE_FILE = "TradeHistory-TEST.csv"
+
 
 def _no_provider(*_args, **_kwargs):
     raise AssertionError("metrics must not hit a price provider")
@@ -49,19 +68,42 @@ def _no_provider(*_args, **_kwargs):
 
 @unittest.skipIf(TestClient is None, "fastapi.testclient unavailable")
 class MetricsCase(unittest.TestCase):
+    # None stands for "no statement loaded", which is a separate branch of the response.
+    TRADE_ROWS = TRADE_ROWS
+
     def setUp(self):
         from backend.app.main import app
+        from backend.app.api.v1 import portfolio as portfolio_api
 
         self.tmpdir = tempfile.mkdtemp(prefix="verify_metrics_api_")
         self.values_path = os.path.join(self.tmpdir, "values.json")
         with open(self.values_path, "w") as f:
             json.dump(STORED, f)
+        self.map_path = os.path.join(self.tmpdir, "tickers.json")
+        with open(self.map_path, "w") as f:
+            json.dump(TICKER_MAP, f)
+
+        trade_df = (
+            None
+            if self.TRADE_ROWS is None
+            else pd.DataFrame(self.TRADE_ROWS, columns=TRADE_COLUMNS)
+        )
 
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(settings, "PORTFOLIO_VALUES_FILE", self.values_path))
+        stack.enter_context(patch.object(settings, "TICKER_MAP_FILE", self.map_path))
         stack.enter_context(patch.object(history_service, "get_price_history", _no_provider))
         stack.enter_context(patch.object(history_service, "get_historical_fx", _no_provider))
+        # The live endpoint scans ~/Downloads for the newest export, which would make these
+        # assertions depend on whatever the developer last downloaded.
+        stack.enter_context(
+            patch.object(
+                portfolio_api,
+                "get_or_load_trade_df",
+                lambda _user_id: (trade_df, None if trade_df is None else SOURCE_FILE),
+            )
+        )
         self.client = TestClient(app)
 
     def get(self, path, **params):
@@ -111,6 +153,106 @@ class TestMetricsEndpoint(MetricsCase):
         self.assertEqual(body["account_id"], "NOSUCH")
         self.assertEqual(body["windows"]["ALL"]["trading_days"], 0)
         self.assertIsNone(body["windows"]["ALL"]["start_date"])
+
+
+class TestRealisedMetrics(MetricsCase):
+    """The closed-trade half of the response, which backs the Win Rate tile (KAN-52)."""
+
+    def realised(self, timeframe="ALL"):
+        return self.get("metrics")["realised"][timeframe]
+
+    def test_the_realised_block_survives_response_model_filtering(self):
+        body = self.get("metrics")
+        self.assertEqual(sorted(body["realised"]), sorted(["1M", "3M", "6M", "1Y", "ALL"]))
+        self.assertEqual(
+            sorted(self.realised()),
+            sorted(
+                [
+                    "timeframe",
+                    "start_date",
+                    "end_date",
+                    "disposals",
+                    "winning_disposals",
+                    "win_rate_pct",
+                    "realised_pnl_gbp",
+                ]
+            ),
+        )
+
+    def test_win_rate_reaches_the_client_backed_by_per_disposal_pnl(self):
+        all_window = self.realised()
+        self.assertEqual(all_window["disposals"], 1)
+        self.assertEqual(all_window["winning_disposals"], 1)
+        self.assertAlmostEqual(all_window["win_rate_pct"], 100.0, places=6)
+
+    def test_the_realised_figure_is_the_corporate_action_adjusted_one(self):
+        self.assertAlmostEqual(self.realised()["realised_pnl_gbp"], 409.98, places=2)
+
+    def test_realised_bounds_are_its_own_and_not_the_value_series(self):
+        # The stored series ends 2024-01-05 and the statement ends 2026-10-19. A tile that borrowed
+        # the curve's period would describe a window its own figures do not cover (KAN-27).
+        body = self.get("metrics")
+        self.assertEqual(body["realised"]["ALL"]["end_date"], "2026-10-19")
+        self.assertEqual(body["windows"]["ALL"]["end_date"], "2024-01-05")
+
+    def test_the_realised_figures_do_not_depend_on_which_account_is_asked_for(self):
+        # The statement is the caller's own; `account_id` selects a stored value series, so it must
+        # move `windows` without moving `realised`.
+        other = self.get("metrics", account_id="QRPOL")
+        self.assertAlmostEqual(other["realised"]["ALL"]["realised_pnl_gbp"], 409.98, places=2)
+        self.assertEqual(other["windows"]["ALL"]["trading_days"], 1)
+
+    def test_coverage_says_what_the_figures_were_computed_from(self):
+        coverage = self.get("metrics")["realised_coverage"]
+        self.assertEqual(coverage["source_file"], SOURCE_FILE)
+        self.assertEqual(coverage["corporate_action_rows"], 6)
+        self.assertAlmostEqual(coverage["corporate_action_cash_gbp"], 13.29, places=2)
+        self.assertEqual(coverage["excluded_disposals"], 0)
+        self.assertEqual(coverage["excluded_tickers"], [])
+        self.assertIsNone(coverage["unavailable_reason"])
+
+    def test_the_risk_tiles_are_unaffected_by_the_statement(self):
+        # The two halves come from different sources; adding one must not disturb the other.
+        all_window = self.get("metrics")["windows"]["ALL"]
+        self.assertAlmostEqual(all_window["cumulative_return_pct"], 20.0, places=6)
+        self.assertEqual(all_window["trading_days"], 4)
+
+
+class TestRealisedWithoutAStatement(MetricsCase):
+    TRADE_ROWS = None
+
+    def test_no_statement_means_nulls_and_a_reason_rather_than_zeroes(self):
+        body = self.get("metrics")
+        for timeframe, window in body["realised"].items():
+            self.assertEqual(window["disposals"], 0, timeframe)
+            self.assertIsNone(window["win_rate_pct"], timeframe)
+            self.assertIsNone(window["realised_pnl_gbp"], timeframe)
+        self.assertIn("No trade statement", body["realised_coverage"]["unavailable_reason"])
+        self.assertIsNone(body["realised_coverage"]["source_file"])
+
+    def test_the_risk_tiles_still_work_without_a_statement(self):
+        # A missing statement must blank the Win Rate tile only, not the whole row.
+        self.assertAlmostEqual(
+            self.get("metrics")["windows"]["ALL"]["cumulative_return_pct"], 20.0, places=6
+        )
+
+
+class TestRealisedWithNoClosedTrades(MetricsCase):
+    """Someone who has bought and never sold. There is no win rate yet, and 0% is not it."""
+
+    TRADE_ROWS = [row for row in TRADE_ROWS if row[4] > 0]
+
+    def test_an_open_only_statement_reports_nulls_rather_than_zeroes(self):
+        body = self.get("metrics")
+        all_window = body["realised"]["ALL"]
+        self.assertEqual(all_window["disposals"], 0)
+        self.assertEqual(all_window["winning_disposals"], 0)
+        self.assertIsNone(all_window["win_rate_pct"])
+        self.assertIsNone(all_window["realised_pnl_gbp"])
+        self.assertIsNone(all_window["start_date"])
+        # The statement is loaded, so there is no reason to give -- just nothing closed yet.
+        self.assertIsNone(body["realised_coverage"]["unavailable_reason"])
+        self.assertEqual(body["realised_coverage"]["source_file"], SOURCE_FILE)
 
 
 class TestBenchmarkEndpoint(MetricsCase):
