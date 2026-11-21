@@ -38,6 +38,32 @@ const WATERFALL_TILES: { label: string; category: string; caption: string }[] = 
 ];
 const WATERFALL_TILE_CATEGORIES = new Set(WATERFALL_TILES.map((t) => t.category));
 
+// Why the backend declined to derive a cash balance. Keys are portfolio_engine's
+// CASH_WITHHELD_* values; each has to name the real obstacle, since the tile previously claimed
+// brokers don't report cash at all, which is false of the transaction statement (KAN-56).
+const CASH_WITHHELD_COPY: Record<string, { caption: string; title: string }> = {
+  no_ledger: {
+    caption: 'No transaction statement loaded',
+    title: 'Upload a TransactionHistory*.csv — the cash balance is derived from its ledger',
+  },
+  unreadable_amounts: {
+    caption: 'Statement has unreadable amounts',
+    title: 'At least one PL Amount cell could not be parsed, so the balance would be wrong by an unknown amount',
+  },
+  non_gbp: {
+    caption: 'Statement is not single-currency GBP',
+    title: 'A bare ledger sum is only a balance while every row shares one currency, and the statement carries no FX rate',
+  },
+  undated: {
+    caption: 'Statement rows could not be dated',
+    title: 'Without a date on every row the inception check cannot run, and an incomplete window nets to a wrong balance',
+  },
+  partial_window: {
+    caption: 'Statement starts after account inception',
+    title: 'The running balance goes negative, so the founding deposits are missing from this export — the net is not a balance',
+  },
+};
+
 type WaterfallState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
@@ -335,6 +361,16 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
   // Every figure on this page is a placeholder when this is true, so the status bar has to say so.
   const isShowingSamples = !isMissingTradeHistory && !hasLivePositions;
 
+  // Derived from the real ledger, so it must not appear beside SAMPLE_POSITIONS. Scenario B is
+  // deliberately not suppressed: a transaction statement with no trade history still has cash.
+  const cashBalance = isShowingSamples ? null : summary?.cash_balance ?? null;
+  const cashWithheld = isShowingSamples
+    ? { caption: 'Not calculated for sample data', title: 'Showing sample positions — no real statement to derive a balance from' }
+    : CASH_WITHHELD_COPY[cashBalance?.withheld_reason ?? ''] ?? {
+        caption: 'Cannot derive from this statement',
+        title: 'The transaction statement does not support a cash balance',
+      };
+
   const waterfallItems = waterfall.status === 'ready' ? waterfall.items : [];
   // An empty payload means no transaction statement is loaded: show absence, not zeros.
   const hasTransactionData = waterfallItems.length > 0;
@@ -546,21 +582,40 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
               </div>
             </div>
 
-            {/* Cash Available — IG's CSV exports carry no cash balance, so there is nothing to show */}
+            {/* Cash Balance — netted from the transaction ledger, withheld when it cannot be trusted */}
             <div className="p-space-sm rounded-lg bg-surface-container-lowest border border-surface-container/40 flex flex-col justify-between">
               <span className="font-label-caps text-label-caps text-on-surface-variant uppercase">
-                Cash Available (Uninvested)
+                Cash Balance (Derived)
               </span>
-              <span
-                className="font-data-mono-lg text-data-mono-lg text-outline tracking-tight my-1 font-semibold"
-                title="No data source: cash balance is not present in IG trade or transaction statements"
-              >
-                —
-              </span>
-              <div className="flex items-center gap-1 font-data-mono-sm text-data-mono-sm text-outline">
-                <span className="material-symbols-outlined text-[14px]">info</span>
-                <span>Not reported in CSV statements</span>
-              </div>
+              {cashBalance?.balance_gbp != null ? (
+                <>
+                  <span
+                    className="font-data-mono-lg text-data-mono-lg text-on-surface tracking-tight my-1 font-semibold"
+                    title="Settled cash implied by the transaction statement. Not IG's &quot;available to trade&quot;, which also nets margin and unsettled trades."
+                  >
+                    £{cashBalance.balance_gbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                  <div className="flex items-center gap-1 font-data-mono-sm text-data-mono-sm text-outline">
+                    <span className="material-symbols-outlined text-[14px]">receipt_long</span>
+                    <span>
+                      Ledger {cashBalance.covered_from} → {cashBalance.covered_to}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span
+                    className="font-data-mono-lg text-data-mono-lg text-outline tracking-tight my-1 font-semibold"
+                    title={cashWithheld.title}
+                  >
+                    —
+                  </span>
+                  <div className="flex items-center gap-1 font-data-mono-sm text-data-mono-sm text-outline">
+                    <span className="material-symbols-outlined text-[14px]">info</span>
+                    <span>{cashWithheld.caption}</span>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Total Cost Basis */}

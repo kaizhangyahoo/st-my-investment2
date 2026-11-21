@@ -43,6 +43,19 @@ class DataQuality(BaseModel):
     unpriced_tickers: List[str] = []
     failures: List[ProviderFailure] = []
 
+class CashBalance(BaseModel):
+    """Settled cash implied by the transaction statement, plus the window it was derived from.
+
+    Not a broker figure -- IG's "available to trade" nets margin and unsettled trades, and this
+    repo has no IG balance client. `balance_gbp` is null whenever the statement cannot support a
+    balance, and `withheld_reason` names the check that failed; a partial export nets to a
+    plausible-looking wrong number, so withholding beats approximating.
+    """
+    balance_gbp: Optional[float] = None
+    covered_from: Optional[str] = None
+    covered_to: Optional[str] = None
+    withheld_reason: Optional[str] = None
+
 class PortfolioSummary(BaseModel):
     total_market_value_gbp: float
     total_invested_cash: float
@@ -56,6 +69,8 @@ class PortfolioSummary(BaseModel):
     unresolved_symbols: List[UnresolvedSymbol] = []
     excluded_row_count: int = 0
     data_quality: Optional[DataQuality] = None
+    # `total_invested_cash` above is cost basis, not cash. This is the uninvested balance.
+    cash_balance: Optional[CashBalance] = None
 
 class PortfolioHistoryPoint(BaseModel):
     date: str

@@ -52,6 +52,15 @@ export interface DataQuality {
   failures: ProviderFailure[];
 }
 
+export interface CashBalance {
+  // Null when the statement cannot support a balance; `withheld_reason` names the check that
+  // failed. Derived from the transaction ledger, not a broker figure.
+  balance_gbp?: number | null;
+  covered_from?: string | null;
+  covered_to?: string | null;
+  withheld_reason?: string | null;
+}
+
 export interface PortfolioSummary {
   total_market_value_gbp: number;
   total_invested_cash: number;
@@ -65,6 +74,7 @@ export interface PortfolioSummary {
   unresolved_symbols?: UnresolvedSymbol[];
   excluded_row_count?: number;
   data_quality?: DataQuality | null;
+  cash_balance?: CashBalance | null;
 }
 
 export type FeedState = 'loading' | 'live' | 'partial' | 'degraded' | 'offline';

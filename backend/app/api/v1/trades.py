@@ -7,7 +7,7 @@ import glob
 import re
 from datetime import datetime
 
-from backend.app.services.portfolio_engine import calculate_positions_from_df, calculate_cashflow_waterfall, empty_data_quality
+from backend.app.services.portfolio_engine import calculate_positions_from_df, calculate_cashflow_waterfall, derive_cash_balance, empty_data_quality
 from backend.app.services.ticker_service import find_unresolved_symbols, load_ticker_mappings, resolve_ticker
 from backend.app.schemas.portfolio import PortfolioSummary, CashflowItem, TradeActivityItem
 from backend.app.core.security import get_current_user
@@ -244,6 +244,9 @@ def get_portfolio_summary(user: dict = Depends(get_current_user)):
             "trade_activities": [],
             "missing_trade_history": missing_trade,
             "data_quality": empty_data_quality(),
+            # The cash ledger stands on its own: a transaction statement with no trade history
+            # still yields a balance.
+            "cash_balance": derive_cash_balance(_LAST_TRANSACTION_DF.get(user_id)),
         }
 
     res = calculate_positions_from_df(df)
@@ -251,6 +254,7 @@ def get_portfolio_summary(user: dict = Depends(get_current_user)):
     res["transaction_file"] = trans_filename
     res["trade_activities"] = extract_trade_activities(df)
     res["missing_trade_history"] = False
+    res["cash_balance"] = derive_cash_balance(_LAST_TRANSACTION_DF.get(user_id))
     return res
 
 @router.get("/waterfall", response_model=List[CashflowItem])

@@ -1,4 +1,4 @@
-"""Trade-history fixtures and an offline portfolio-engine runner.
+"""Trade-history and transaction-statement fixtures, plus an offline portfolio-engine runner.
 
 Three isolation rules make these fixtures safe to reuse:
 
@@ -38,6 +38,26 @@ TRADE_CSV = (
 )
 
 PRICES = {"AAPL": 200.0, "BOGUS.L": 7.0, "FIRY": 2.0}
+
+# Shape of a real IG TransactionHistory export: amounts >= 1,000 carry a thousands separator,
+# `PL Amount` is already signed, every row is GBP, and both a `DateUtc` and a `TextDate` are
+# present. Opens with the founding deposit, so the running balance never goes negative and the
+# ledger reads as reaching account inception.
+TRANSACTION_CSV = (
+    "TextDate,Summary,MarketName,PL Amount,Cash transaction,DateUtc,CurrencyIsoCode\n"
+    '01/04/19,Cash In,Bank Deposit,"5,000.00",false,2019-04-01T09:15:00,GBP\n'
+    '02/04/19,Client Consideration,Lam Research Corp CONS 2@100,"-2,000.00",false,2019-04-02T10:00:00,GBP\n'
+    "03/04/19,Dividend,Lam Research Corp DIVIDEND 2@33.77,67.55,false,2019-04-03T11:30:00,GBP\n"
+    "04/04/19,Share Dealing Commissions,Lam Research Corp COMM,-10.00,false,2019-04-04T11:30:00,GBP\n"
+    '05/04/19,Client Consideration,Lam Research Corp CONS 1@150,"1,500.00",false,2019-04-05T14:45:00,GBP\n'
+)
+
+# 5000.00 - 2000.00 + 67.55 - 10.00 + 1500.00
+TRANSACTION_BALANCE = 4557.55
+
+
+def transaction_df(csv_text=TRANSACTION_CSV):
+    return pd.read_csv(io.StringIO(csv_text))
 
 # AAPL   : 10 x 200 = 2000 USD / 1.25 = 1600.00 GBP, costs -1000.00 -> P&L +600.00
 # BOGUS.L:  8 x   7 =            56.00 GBP (.L is already GBP), costs  -801.00 -> P&L -745.00

@@ -132,13 +132,19 @@ def _classify_blank_summary(market_name: Any) -> str:
         return 'Cash In'
     return 'Uncategorised'
 
+def _cash_amounts(column: pd.Series) -> pd.Series:
+    """IG's `PL Amount` column as floats, NaN where a cell will not parse.
+
+    Strips thousands separators regardless of dtype: pandas 3 reads this column as StringDtype,
+    not object, and "5,000.00" would otherwise coerce to NaN.
+    """
+    return pd.to_numeric(
+        column.astype(str).str.replace(r'[£,\s]', '', regex=True), errors='coerce'
+    )
+
 def calculate_cashflow_waterfall(df_transactions: pd.DataFrame) -> List[Dict[str, Any]]:
     df = df_transactions.copy()
-    # Strip thousands separators regardless of dtype: pandas 3 reads this column as StringDtype,
-    # not object, and "5,000.00" would otherwise coerce to NaN and be summed as 0.
-    df['PL Amount'] = pd.to_numeric(
-        df['PL Amount'].astype(str).str.replace(r'[£,\s]', '', regex=True), errors='coerce'
-    ).fillna(0)
+    df['PL Amount'] = _cash_amounts(df['PL Amount']).fillna(0)
     blank = df['Summary'].isna() | (df['Summary'].astype(str).str.strip() == '')
     market_names = df['MarketName'] if 'MarketName' in df.columns else pd.Series('', index=df.index)
     df['Summary'] = df['Summary'].astype(object)
@@ -149,4 +155,81 @@ def calculate_cashflow_waterfall(df_transactions: pd.DataFrame) -> List[Dict[str
     for cat, val in summary_flow.items():
         waterfall.append({"category": str(cat), "amount": float(val)})
     return waterfall
+
+# Why a derived balance was withheld. Every one of these has to beat showing a figure, because a
+# wrong balance is indistinguishable from a right one on screen.
+CASH_WITHHELD_NO_LEDGER = "no_ledger"
+CASH_WITHHELD_UNREADABLE = "unreadable_amounts"
+CASH_WITHHELD_NON_GBP = "non_gbp"
+CASH_WITHHELD_UNDATED = "undated"
+CASH_WITHHELD_PARTIAL_WINDOW = "partial_window"
+
+# `DateUtc` is ISO and unambiguous, so it is preferred; `TextDate` is `DD/MM/YY`, which has to be
+# read day-first or 01/04/19 becomes 4 January. Both formats are pinned rather than inferred: a
+# layout we do not recognise should leave the balance withheld, not reordered by a dateutil guess.
+_STATEMENT_DATE_COLUMNS = (("DateUtc", "ISO8601"), ("TextDate", "%d/%m/%y"))
+
+def _statement_dates(df: pd.DataFrame) -> Optional[pd.Series]:
+    """Timestamps for every row, or None if no column dates all of them.
+
+    A column that dates only some rows is no use here: the rows it misses are cash movements
+    missing from the coverage check, which is the one thing standing between a partial export
+    and a wrong balance.
+    """
+    for column, date_format in _STATEMENT_DATE_COLUMNS:
+        if column not in df.columns:
+            continue
+        parsed = pd.to_datetime(df[column], errors='coerce', format=date_format)
+        if parsed.notna().all():
+            return parsed
+    return None
+
+def derive_cash_balance(df_transactions: Optional[pd.DataFrame]) -> Dict[str, Any]:
+    """Settled cash balance implied by an IG transaction statement, or why it cannot be derived.
+
+    `PL Amount` is already signed -- deposits arrive positive and fees negative without needing a
+    flip from `Transaction type` -- so the balance is just its sum. That only holds if the
+    statement reaches account inception: a mid-life export omits the founding deposits and nets
+    to a figure that still looks like a balance.
+
+    Which is detectable without trusting the filename. On a complete ledger the running balance
+    never goes negative, because nothing can be bought before the cash to buy it arrives. The
+    check runs on daily totals rather than row order, since rows within one day carry no sequence
+    and a purchase booked ahead of its deposit would dip the balance spuriously.
+
+    This is not a broker figure. IG's own "available to trade" nets margin and unsettled trades,
+    and there is no IG balance client in this repo -- the statement is the only source.
+    """
+    if (
+        df_transactions is None
+        or df_transactions.empty
+        or 'PL Amount' not in df_transactions.columns
+    ):
+        return {"withheld_reason": CASH_WITHHELD_NO_LEDGER}
+
+    amounts = _cash_amounts(df_transactions['PL Amount'])
+    if amounts.isna().any():
+        # Unlike the waterfall, a balance cannot absorb these as zero: the sum would be wrong by
+        # an unknown amount and nothing on screen would say so.
+        return {"withheld_reason": CASH_WITHHELD_UNREADABLE}
+
+    currencies = df_transactions.get('CurrencyIsoCode')
+    if currencies is None or set(currencies.astype(str).str.strip().str.upper()) != {'GBP'}:
+        # A bare sum is only a balance while every row is in one currency, and the statement has
+        # no rate to convert with.
+        return {"withheld_reason": CASH_WITHHELD_NON_GBP}
+
+    dates = _statement_dates(df_transactions)
+    if dates is None:
+        return {"withheld_reason": CASH_WITHHELD_UNDATED}
+
+    covered = {
+        "covered_from": dates.min().strftime('%Y-%m-%d'),
+        "covered_to": dates.max().strftime('%Y-%m-%d'),
+    }
+    running = amounts.groupby(dates.dt.normalize()).sum().sort_index().cumsum()
+    if (running.round(2) < 0).any():
+        return {**covered, "withheld_reason": CASH_WITHHELD_PARTIAL_WINDOW}
+
+    return {**covered, "balance_gbp": round(float(amounts.sum()), 2)}
 
