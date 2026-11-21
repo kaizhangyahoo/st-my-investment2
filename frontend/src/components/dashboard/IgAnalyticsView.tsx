@@ -1145,12 +1145,17 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
                     <tr key={idx} className="hover:bg-surface-container-high/40">
                       <td className="py-2 px-space-sm">
                         <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${act.activity === 'BUY'
-                              ? 'bg-primary/10 text-primary border border-primary/20'
-                              : 'bg-error/10 text-error border border-error/20'
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${act.is_corporate_action
+                              ? 'bg-amber-400/10 text-amber-400 border border-amber-400/20'
+                              : act.activity === 'BUY'
+                                ? 'bg-primary/10 text-primary border border-primary/20'
+                                : 'bg-error/10 text-error border border-error/20'
                             }`}
+                          title={act.is_corporate_action
+                            ? 'Classified CORPORATE ACTION by the IG statement — a split, merger or scheme of arrangement, not an order placed by you'
+                            : undefined}
                         >
-                          {act.activity}
+                          {act.is_corporate_action ? `CORP ACTION ${act.activity}` : act.activity}
                         </span>
                       </td>
                       <td className="py-2 px-space-sm text-on-surface font-medium">

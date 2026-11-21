@@ -23,6 +23,9 @@ class TradeActivityItem(BaseModel):
     date: str
     time: str
     activity: str
+    # True when the statement's `Activity` column said CORPORATE ACTION. Additive to `activity`,
+    # which keeps reporting the direction, so a corp-action sell still filters as a SELL.
+    is_corporate_action: bool = False
     market: str
     ticker: Optional[str] = None
 

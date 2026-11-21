@@ -8,6 +8,7 @@ import re
 from datetime import datetime
 
 from backend.app.services.portfolio_engine import calculate_positions_from_df, calculate_cashflow_waterfall, derive_cash_balance, empty_data_quality
+from backend.app.services.realised_pnl import CORPORATE_ACTION
 from backend.app.services.ticker_service import find_unresolved_symbols, load_ticker_mappings, resolve_ticker
 from backend.app.schemas.portfolio import PortfolioSummary, CashflowItem, TradeActivityItem
 from backend.app.core.security import get_current_user
@@ -136,6 +137,12 @@ def extract_trade_activities(df: pd.DataFrame, limit: Optional[int] = None) -> L
             cost = row.get('Cost/Proceeds', 0.0)
             parsed = row.get('ParsedDate')
             market = str(row.get('Market', ''))
+            # The statement's own `Activity` column is the only thing that says a row was a
+            # corporate action rather than an order the user placed -- 44 of this account's 339
+            # rows are. `activity` deliberately stays BUY/SELL: a corp-action sell is still a
+            # disposal, and the side filter, the cost-basis sum and the inspector chart all key
+            # on it, so the distinction is carried alongside instead of overwriting it.
+            is_corporate_action = str(row.get('Activity', '')).strip().upper() == CORPORATE_ACTION
             activities.append({
                 'qty': abs(qty),
                 'fill': normalise_fill_price(
@@ -145,6 +152,7 @@ def extract_trade_activities(df: pd.DataFrame, limit: Optional[int] = None) -> L
                 'date': parsed.strftime('%Y-%m-%d') if pd.notnull(parsed) else str(row.get('TextDate', '')),
                 'time': str(row.get('Time', '')),
                 'activity': act,
+                'is_corporate_action': is_corporate_action,
                 'market': market,
                 'ticker': resolve_ticker(market, ticker_map),
             })

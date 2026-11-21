@@ -28,7 +28,11 @@ export interface TradeActivityItem {
   value: string;
   date: string;
   time: string;
+  // The direction, BUY or SELL, whether or not the user placed the order themselves.
   activity: string;
+  // Set when the IG statement classified the row as a corporate action — a split, merger or
+  // scheme of arrangement — so the badge can say so rather than implying a manual trade.
+  is_corporate_action?: boolean;
   market: string;
   ticker?: string | null;
 }
