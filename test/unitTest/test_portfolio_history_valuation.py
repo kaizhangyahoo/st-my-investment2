@@ -15,6 +15,7 @@ import pandas as pd
 
 from backend.app.core.config import settings
 from backend.app.services import history_service
+from test.support.portfolio import temp_fx_store
 
 DATES = ["2024-01-02", "2024-01-03", "2024-01-04"]
 GBPUSD, GBPEUR = 2.0, 1.25
@@ -33,14 +34,18 @@ def _fx(dates=DATES):
 
 
 class HistoryCase(unittest.TestCase):
-    """Points the ticker map and the shared values file at throwaway files."""
+    """Points the ticker map, the shared values file and the FX store at throwaway files."""
 
     MAPPINGS = {"Apple Inc": "AAPL", "Vodafone Group": "VOD.L", "Adidas AG": "ADS.DE"}
     PRICES = {}          # ticker -> (close series, quote currency)
     FX_FALLBACK = False
     SEED_CACHE = None    # initial contents of the shared values file
+    # Real closes the FX store already holds. Whether the store is empty is how a degraded feed
+    # is told apart from an approximated one, so a seed is needed to exercise the former.
+    SEED_FX = None
 
     def setUp(self):
+        temp_fx_store(self, seed=self.SEED_FX)
         self.tmpdir = tempfile.mkdtemp(prefix="verify_history_")
         self.map_path = os.path.join(self.tmpdir, "ticker_map.json")
         self.values_path = os.path.join(self.tmpdir, "user_portfolio_values.json")
@@ -170,6 +175,73 @@ class TestIncompleteDataInvalidatesDate(HistoryCase):
             res = self.run_history("Market,Quantity,Date\nApple Inc,10,2024-01-02\n")
         self.assertEqual(res["data_quality"]["unpriced_tickers"], ["AAPL"])
         self.assertTrue(res["data_quality"]["degraded"])
+
+
+class TestFxUnbackedDatesAreWithheld(HistoryCase):
+    """KAN-55: a date is persisted only if a real FX rate covers it.
+
+    `_fx_frames` carries the last known rate across the end of the series, which is the right
+    answer for a market holiday and the wrong one to save: the shared values file holds a bare
+    float with nowhere to record that it was approximated, and `compute_history` never revisits a
+    date already in it. The estimate would be permanent -- and, because the old `fx_fallback`
+    described only the work this request did, reported as clean on every later read.
+    """
+
+    PRICES = {
+        "AAPL": (_history([100.0, 100.0, 100.0]), "USD"),
+        "VOD.L": (_history([200.0, 200.0, 200.0]), "GBp"),
+    }
+    # The feed stops a day short of the closes: real rates through the 3rd, nothing for the 4th.
+    BACKED = DATES[:2]
+    SEED_FX = {
+        "GBPUSD=X": {d: GBPUSD for d in BACKED},
+        "GBPEUR=X": {d: GBPEUR for d in BACKED},
+    }
+    TRADES = "Market,Quantity,Date\nApple Inc,10,2024-01-02\n"
+
+    def run_truncated(self, trades=None):
+        with patch.object(
+            history_service, "get_historical_fx", lambda s: (_fx(self.BACKED), False)
+        ):
+            return self.run_history(trades or self.TRADES)
+
+    def test_the_date_past_the_last_real_rate_is_not_valued(self):
+        self.assertEqual(sorted(self.values(self.run_truncated())), self.BACKED)
+
+    def test_it_is_withheld_rather_than_stored_as_an_estimate(self):
+        self.run_truncated()
+        self.assertEqual(sorted(self.stored()["ig:u1"]), self.BACKED)
+
+    def test_the_withheld_dates_are_counted_and_announced(self):
+        quality = self.run_truncated()["data_quality"]
+        self.assertEqual(quality["fx_unbacked_dates"], 1)
+        self.assertEqual(quality["skipped_dates"], 0, "the close was there; the rate was not")
+        self.assertTrue(quality["fx_fallback"])
+        self.assertTrue(quality["degraded"])
+
+    def test_a_gbp_only_holding_needs_no_rate_and_is_valued_in_full(self):
+        res = self.run_truncated("Market,Quantity,Date\nVodafone Group,10,2024-01-02\n")
+        self.assertEqual(sorted(self.values(res)), DATES)
+        self.assertEqual(res["data_quality"]["fx_unbacked_dates"], 0)
+        self.assertFalse(res["data_quality"]["fx_fallback"])
+
+    def test_the_date_is_recomputed_once_a_real_rate_exists(self):
+        # This is what withholding buys: a stored date is never revisited, so a value written
+        # today at a guessed rate could never be corrected.
+        self.run_truncated()
+        later = self.run_history(self.TRADES)
+        self.assertEqual(sorted(self.values(later)), DATES)
+        self.assertEqual(later["data_quality"]["fx_unbacked_dates"], 0)
+        self.assertFalse(later["data_quality"]["fx_fallback"])
+
+    def test_approximated_rates_back_no_date_at_all(self):
+        # An empty store is what tells the hardcoded constants apart from real-but-stale rates:
+        # the constants' index runs to today and backs nothing on it.
+        temp_fx_store(self)
+        with patch.object(history_service, "get_historical_fx", lambda s: (_fx(), True)):
+            res = self.run_history(self.TRADES)
+        self.assertEqual(res["points"], [])
+        self.assertEqual(res["data_quality"]["fx_unbacked_dates"], len(DATES))
 
 
 class TestSharedCacheFile(HistoryCase):

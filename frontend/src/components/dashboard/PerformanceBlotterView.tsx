@@ -31,7 +31,7 @@ const deriveState = (res: PortfolioHistoryResponse): { state: FeedState; detail:
   const dq = res.data_quality;
   const detail: string[] = [];
   if (dq.fx_fallback) {
-    detail.push('FX rates unavailable — non-GBP valuations are estimates, not real quotes');
+    detail.push('FX feed incomplete — dates needing a rate nobody quoted are withheld, not estimated');
   }
   if (dq.unpriced_tickers.length) {
     detail.push(`No history from any provider: ${dq.unpriced_tickers.join(', ')}`);
@@ -41,6 +41,9 @@ const deriveState = (res: PortfolioHistoryResponse): { state: FeedState; detail:
   );
   if (dq.skipped_dates) {
     detail.push(`${dq.skipped_dates} trading day(s) dropped — an open position had no close`);
+  }
+  if (dq.fx_unbacked_dates) {
+    detail.push(`${dq.fx_unbacked_dates} trading day(s) withheld — no real FX rate to value them at`);
   }
   if (dq.degraded) return { state: 'degraded', detail };
   if (detail.length) return { state: 'partial', detail };

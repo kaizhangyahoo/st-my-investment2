@@ -6,12 +6,12 @@ must announce that the figures are approximate rather than presenting them as re
 import unittest
 from unittest.mock import patch
 
-import pandas as pd
 import requests
 
 from backend.app.core.cache import cache
 from backend.app.core.config import settings
 from backend.app.services import market_service, price_service
+from test.support.portfolio import fx_frame, temp_fx_store
 from test.support.stubs import response, session_stub, yahoo_history, yahoo_quote
 
 
@@ -67,6 +67,7 @@ class TestTransientFailureIsNotPinned(unittest.TestCase):
     def setUp(self):
         cache.clear()
         self.addCleanup(cache.clear)
+        temp_fx_store(self)
 
     def call(self, fn, yahoo):
         session, calls = session_stub(yahoo=yahoo)
@@ -145,17 +146,22 @@ class TestTransientFailureIsNotPinned(unittest.TestCase):
 class TestFxFallback(unittest.TestCase):
     """KAN-18 item 5: approximated FX rates must announce themselves."""
 
+    SEED = None
+
     def setUp(self):
         cache.clear()  # get_historical_fx is @ttl_cache'd on a shared module-level singleton
+        self.addCleanup(cache.clear)
+        self.store = temp_fx_store(self, seed=self.SEED)
 
-    tearDown = setUp
+    def fetch(self, yahoo):
+        with patch.object(market_service, "fetch_yahoo_history", yahoo):
+            return market_service.get_historical_fx("2024-01-01")
 
     def test_yahoo_failure_returns_the_fallback_flag(self):
         def boom(symbol, start_date, interval="1d"):
             raise requests.RequestException("yahoo unreachable")
 
-        with patch.object(market_service, "fetch_yahoo_history", boom):
-            fx, fx_fallback = market_service.get_historical_fx("2024-01-01")
+        fx, fx_fallback = self.fetch(boom)
 
         self.assertTrue(fx_fallback)
         self.assertAlmostEqual(float(fx["GBPUSD=X"].iloc[-1]), 1.25)
@@ -163,23 +169,90 @@ class TestFxFallback(unittest.TestCase):
 
     def test_empty_series_counts_as_a_failure(self):
         def empty(symbol, start_date, interval="1d"):
-            return pd.DataFrame({"close": pd.Series(dtype="float64")})
+            return fx_frame(1.29, dates=())
 
-        with patch.object(market_service, "fetch_yahoo_history", empty):
-            _fx, fx_fallback = market_service.get_historical_fx("2024-01-01")
+        _fx, fx_fallback = self.fetch(empty)
 
         self.assertTrue(fx_fallback)
 
     def test_real_rates_report_no_fallback(self):
         def ok(symbol, start_date, interval="1d"):
-            rate = 1.29 if symbol == "GBPUSD=X" else 1.15
-            return pd.DataFrame({"close": [rate]})
+            return fx_frame(1.29 if symbol == "GBPUSD=X" else 1.15)
 
-        with patch.object(market_service, "fetch_yahoo_history", ok):
-            fx, fx_fallback = market_service.get_historical_fx("2024-01-01")
+        fx, fx_fallback = self.fetch(ok)
 
         self.assertFalse(fx_fallback)
         self.assertAlmostEqual(float(fx["GBPUSD=X"].iloc[-1]), 1.29)
+
+    def test_one_dead_cross_degrades_the_whole_answer(self):
+        # A valuation can hold both USD and EUR, so a half-real answer is not a clean one -- and
+        # caching it would hold back the missing cross for the rest of the TTL.
+        def half(symbol, start_date, interval="1d"):
+            if symbol == "GBPEUR=X":
+                raise requests.RequestException("yahoo unreachable")
+            return fx_frame(1.29)
+
+        _fx, fx_fallback = self.fetch(half)
+
+        self.assertTrue(fx_fallback)
+
+
+class TestFxOutageWithStoredHistory(TestFxFallback):
+    """KAN-55: the approximated constants are a last resort, not the first fallback.
+
+    `history_service` *persists* the values it computes and has nowhere to record that a rate was
+    guessed, so an outage that falls back to 1.25 bakes a ~3% error into the saved series
+    permanently. Once a real close has been stored, serving that is strictly better: it is a
+    rate someone actually quoted, and the caller is still told the feed is degraded so the dates
+    it does not cover can be withheld.
+    """
+
+    SEED = {
+        "GBPUSD=X": {"2024-01-02": 1.27, "2024-01-03": 1.29},
+        "GBPEUR=X": {"2024-01-02": 1.16, "2024-01-03": 1.17},
+    }
+
+    def test_yahoo_failure_returns_the_fallback_flag(self):
+        def boom(symbol, start_date, interval="1d"):
+            raise requests.RequestException("yahoo unreachable")
+
+        fx, fx_fallback = self.fetch(boom)
+
+        self.assertTrue(fx_fallback, "the feed is degraded even though the rates are real")
+        self.assertAlmostEqual(float(fx["GBPUSD=X"].iloc[-1]), 1.29)
+        self.assertAlmostEqual(float(fx["GBPEUR=X"].iloc[-1]), 1.17)
+
+    def test_empty_series_counts_as_a_failure(self):
+        def empty(symbol, start_date, interval="1d"):
+            return fx_frame(1.29, dates=())
+
+        fx, fx_fallback = self.fetch(empty)
+
+        self.assertTrue(fx_fallback)
+        self.assertAlmostEqual(float(fx["GBPUSD=X"].iloc[-1]), 1.29)
+
+    def test_the_stored_history_reaches_the_caller_whole(self):
+        def boom(symbol, start_date, interval="1d"):
+            raise requests.RequestException("yahoo unreachable")
+
+        fx, _fx_fallback = self.fetch(boom)
+
+        self.assertEqual(
+            [d.strftime("%Y-%m-%d") for d in fx["GBPUSD=X"].index],
+            ["2024-01-02", "2024-01-03"],
+        )
+
+    def test_one_dead_cross_still_serves_the_other_from_the_fetch(self):
+        def half(symbol, start_date, interval="1d"):
+            if symbol == "GBPEUR=X":
+                raise requests.RequestException("yahoo unreachable")
+            return fx_frame(1.31, dates=("2024-01-04",))
+
+        fx, fx_fallback = self.fetch(half)
+
+        self.assertTrue(fx_fallback)
+        self.assertAlmostEqual(float(fx["GBPUSD=X"].iloc[-1]), 1.31)
+        self.assertAlmostEqual(float(fx["GBPEUR=X"].iloc[-1]), 1.17)
 
 
 if __name__ == "__main__":

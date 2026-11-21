@@ -93,6 +93,9 @@ export interface HistoryDataQuality {
   // Trading days dropped because an open position had no close that day. The series is sparse
   // across those dates, not flat.
   skipped_dates: number;
+  // Trading days dropped instead because a non-GBP position would have needed an FX rate no
+  // provider quoted. Withheld rather than stored as an estimate.
+  fx_unbacked_dates: number;
   unpriced_tickers: string[];
   unconvertible: { ticker: string; currency: string }[];
 }

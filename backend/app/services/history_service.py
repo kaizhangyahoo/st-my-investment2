@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from backend.app.core.config import settings
+from backend.app.services import fx_store
 from backend.app.services.market_service import get_historical_fx, get_price_history
 from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker
 
@@ -66,16 +67,33 @@ def _normalise_trades(df_trade_history: pd.DataFrame) -> pd.DataFrame:
     return df[["Date", "Ticker", "Quantity"]]
 
 
-def _fx_frames(start_date: str, index: pd.DatetimeIndex) -> Tuple[Dict[str, pd.Series], bool]:
-    """GBP crosses forward-filled onto `index`, reproducing the legacy `Series.asof()` lookup."""
+def _fx_frames(
+    start_date: str, index: pd.DatetimeIndex
+) -> Tuple[Dict[str, pd.Series], bool, Optional[pd.Timestamp]]:
+    """GBP crosses forward-filled onto `index`, reproducing the legacy `Series.asof()` lookup.
+
+    Also reports the last date every cross is backed by a real close, or None if none of them
+    are. The ffill is the right answer for a market holiday, but past the end of the series it
+    carries the last rate forward indefinitely and silently, so the caller needs to know where
+    the real rates stop before it persists anything (KAN-55).
+    """
     fx_dict, fx_fallback = get_historical_fx(start_date)
     aligned = {}
+    ends = []
     for pair, series in fx_dict.items():
         s = pd.Series(series).sort_index()
         s.index = pd.to_datetime(s.index).normalize()
         s = s[~s.index.duplicated(keep="last")]
+        if len(s):
+            ends.append(s.index.max())
         aligned[pair] = s.reindex(s.index.union(index)).ffill().reindex(index)
-    return aligned, fx_fallback
+    # A degraded feed with nothing in the store is the one case where the series are the
+    # approximated constants rather than real closes, so their index says nothing about what is
+    # backed: `get_historical_fx` only falls back once every stored rate has been exhausted, and
+    # it stores every real close it fetches.
+    approximated = fx_fallback and fx_store.covered_through() is None
+    real_through = None if approximated or not ends else min(ends)
+    return aligned, fx_fallback, real_through
 
 
 def _price_frame(
@@ -141,6 +159,32 @@ def _value_series(holdings: pd.DataFrame, prices_gbp: pd.DataFrame) -> Tuple[pd.
     invalid = (held & prices.isna()).any(axis=1)
     values = (holdings.where(held, 0.0) * prices.fillna(0.0)).sum(axis=1)
     return values, invalid
+
+
+def _fx_unbacked(
+    holdings: pd.DataFrame,
+    currencies: Dict[str, Optional[str]],
+    real_through: Optional[pd.Timestamp],
+) -> pd.Series:
+    """Dates whose valuation would rest on an FX rate nobody quoted.
+
+    Past the last real close the forward-filled rate is a reasonable number to *show* and a bad
+    one to *store*: the shared file has no room to record that a value was approximated, and
+    nothing ever recomputes a date already in it, so the estimate becomes permanent and
+    indistinguishable from a real valuation (KAN-55). A date holding only GBP-quoted positions
+    needs no rate and is unaffected.
+    """
+    needs_fx = [
+        ticker
+        for ticker, currency in currencies.items()
+        if (currency or "").strip() in _FX_PAIR and ticker in holdings.columns
+    ]
+    if not needs_fx:
+        return pd.Series(False, index=holdings.index)
+    holds_fx = (holdings[needs_fx].fillna(0.0) != 0).any(axis=1)
+    if real_through is None:
+        return holds_fx
+    return holds_fx & (holdings.index > real_through)
 
 
 def _read_cache_file() -> Dict[str, Dict[str, float]]:
@@ -229,6 +273,7 @@ def compute_history(
         "degraded": False,
         "fx_fallback": False,
         "skipped_dates": 0,
+        "fx_unbacked_dates": 0,
         "unpriced_tickers": [],
         "unconvertible": [],
     }
@@ -258,29 +303,36 @@ def compute_history(
     pending = pd.DatetimeIndex([d for d in trading_days if d.strftime("%Y-%m-%d") not in cached])
 
     skipped = 0
+    fx_unbacked = 0
     unconvertible: List[Dict[str, str]] = []
-    fx_fallback = False
+    fx_degraded = False
     if len(pending):
-        fx, fx_fallback = _fx_frames(start_date, pending)
+        fx, fx_degraded, fx_real_through = _fx_frames(start_date, pending)
         prices_gbp, unconvertible = _to_gbp(closes, currencies, fx, pending)
         holdings = _holdings_frame(trades, pending)
         values, invalid = _value_series(holdings, prices_gbp)
         skipped = int(invalid.sum())
+        unbacked = _fx_unbacked(holdings, currencies, fx_real_through)
+        fx_unbacked = int(unbacked.sum())
         fresh = {
             d.strftime("%Y-%m-%d"): float(v)
-            for d, v in values[~invalid].items()
+            for d, v in values[~(invalid | unbacked)].items()
             if pd.notna(v)
         }
         _merge_and_write(key, fresh, replace=force_recompute)
 
+    # Withholding the unsound dates is what lets this flag mean something on a cache hit: a
+    # stored series contains only dates valued on a real rate, so `False` is a statement about
+    # the points being returned and not just about a request that recomputed nothing.
     points = read_cached_series(key)
     return {
         "points": points,
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "data_quality": {
-            "degraded": bool(unpriced or unconvertible or skipped or fx_fallback),
-            "fx_fallback": fx_fallback,
+            "degraded": bool(unpriced or unconvertible or skipped or fx_degraded or fx_unbacked),
+            "fx_fallback": bool(fx_degraded or fx_unbacked),
             "skipped_dates": skipped,
+            "fx_unbacked_dates": fx_unbacked,
             "unpriced_tickers": sorted(unpriced),
             "unconvertible": unconvertible,
         },

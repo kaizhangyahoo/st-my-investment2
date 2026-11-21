@@ -67,10 +67,14 @@ class UnconvertibleHolding(BaseModel):
 
 class HistoryDataQuality(BaseModel):
     """Why the series may be incomplete. `skipped_dates` counts trading days dropped because an
-    open position had no close that day -- the series is sparse there, not flat."""
+    open position had no close that day -- the series is sparse there, not flat.
+    `fx_unbacked_dates` counts the ones dropped instead because a non-GBP position would have
+    been converted at a rate no provider quoted; those are withheld rather than persisted, since
+    the shared values file cannot record that a figure was approximated."""
     degraded: bool = False
     fx_fallback: bool = False
     skipped_dates: int = 0
+    fx_unbacked_dates: int = 0
     unpriced_tickers: List[str] = []
     unconvertible: List[UnconvertibleHolding] = []
 

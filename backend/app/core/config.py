@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     REPO_ROOT: str = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
     TICKER_MAP_FILE: str = os.path.join(REPO_ROOT, "company_name_to_ticker.json")
     PORTFOLIO_VALUES_FILE: str = os.path.join(REPO_ROOT, "user_portfolio_values.json")
+    # Unlike the two above, this one is pure cache: it is rebuilt from the provider on demand and
+    # is not shared with the legacy app, so it is gitignored rather than tracked.
+    FX_HISTORY_FILE: str = os.path.join(REPO_ROOT, "fx_history.json")
 
 settings = Settings()
 

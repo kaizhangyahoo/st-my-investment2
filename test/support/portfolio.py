@@ -1,6 +1,6 @@
 """Trade-history fixtures and an offline portfolio-engine runner.
 
-Two isolation rules make these fixtures safe to reuse:
+Three isolation rules make these fixtures safe to reuse:
 
 1. `TempMappingCase` redirects `settings.TICKER_MAP_FILE` to a per-test temp file, so
    `save_ticker_mappings()` can never write the repo's `company_name_to_ticker.json`.
@@ -9,6 +9,8 @@ Two isolation rules make these fixtures safe to reuse:
 2. `run_engine` patches prices and FX on the `portfolio_engine` bindings rather than on
    `market_service`, which sidesteps the module-level `ttl_cache` singleton and keeps
    every provider offline.
+3. `temp_fx_store` does the same for `settings.FX_HISTORY_FILE`, which any test that reaches
+   `get_historical_fx` for real must use.
 
 Ticker resolution is deliberately NOT patched here: callers of these fixtures are
 testing it, and it runs against the temp mapping file.
@@ -19,6 +21,7 @@ import os
 import tempfile
 import unittest
 from contextlib import ExitStack
+from typing import Optional
 from unittest.mock import patch
 
 import pandas as pd
@@ -56,6 +59,37 @@ def run_engine(df, prices=PRICES):
         ):
             stack.enter_context(patch.object(portfolio_engine, target, new))
         return portfolio_engine.calculate_positions_from_df(df)
+
+
+def fx_frame(rate, dates=("2024-01-02",)):
+    """A frame shaped like `fetch_yahoo_history`'s: a normalised `Date` column, indexed by it.
+
+    Stubbing a bare `close` column instead would pass a fetcher that cannot read a real
+    response, since the dates are what the FX store is keyed on.
+    """
+    df = pd.DataFrame({"Date": pd.to_datetime(list(dates)), "close": [rate] * len(dates)})
+    df.index = df["Date"]
+    return df
+
+
+def temp_fx_store(case: unittest.TestCase, seed: Optional[dict] = None) -> str:
+    """Point `settings.FX_HISTORY_FILE` at a throwaway path for the rest of `case`.
+
+    `get_historical_fx` persists every real close it fetches, and the default path is the repo's
+    own `fx_history.json`. A test that drives it without this would seed the developer's store
+    with stub rates, read them back on the next run, and so stop testing what it says it does.
+    `seed` writes a starting store, which is how an outage with usable history is set up.
+    """
+    directory = tempfile.mkdtemp(prefix="verify_fx_store_")
+    store_path = os.path.join(directory, "fx_history.json")
+    if seed is not None:
+        with open(store_path, "w") as f:
+            json.dump(seed, f)
+    patcher = patch.object(settings, "FX_HISTORY_FILE", store_path)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    case.assertEqual(settings.FX_HISTORY_FILE, store_path)
+    return store_path
 
 
 class TempMappingCase(unittest.TestCase):
