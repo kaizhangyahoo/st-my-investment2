@@ -17,14 +17,17 @@ from contextlib import ExitStack
 from unittest.mock import patch
 
 import pandas as pd
+import requests
 
 try:
     from fastapi.testclient import TestClient
 except ImportError:  # pragma: no cover - httpx/fastapi absent
     TestClient = None
 
+from backend.app.core.cache import cache
 from backend.app.core.config import settings
-from backend.app.services import history_service
+from backend.app.services import history_service, price_service
+from test.support.stubs import response, session_stub, yahoo_history
 
 # QX2B3 is the richer series, so it is the account both endpoints land on by default.
 STORED = {
@@ -302,6 +305,37 @@ class TestBenchmarkEndpoint(MetricsCase):
         )
         body, _ = self.benchmark(closes=gappy)
         self.assertEqual([p["date"] for p in body["points"]], ["2024-01-02"])
+
+
+class TestBenchmarkSurvivesATransientOutage(MetricsCase):
+    """KAN-53 as it was reported: one SSL error against Yahoo turned the S&P 500 comparison
+    off, and because the failure took the cache key the toggle stayed dead for an hour --
+    nothing in `backend/` clears the cache, so only a restart brought the line back.
+
+    The provider is stubbed at the HTTP session rather than at `get_price_history`, which the
+    rest of this file patches out: the point is whether the fetch is attempted a second time.
+    """
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def fetch(self, yahoo):
+        session, calls = session_stub(yahoo=yahoo)
+        with patch.object(price_service, "_session", session):
+            return self.get("benchmark"), calls
+
+    def test_the_comparison_line_comes_back_as_soon_as_the_provider_does(self):
+        body, failed = self.fetch(requests.RequestException("SSLCertVerificationError"))
+        self.assertEqual(body["points"], [])
+        self.assertIn("VUSA.L", body["unavailable_reason"])
+        self.assertEqual(len(failed), 1)
+
+        body, retried = self.fetch(lambda url, kw: response(payload=yahoo_history()))
+        self.assertEqual(len(retried), 1, "the failure was cached, so no retry was attempted")
+        self.assertEqual([p["value"] for p in body["points"]], [100.0])
+        self.assertIsNone(body["unavailable_reason"])
 
 
 if __name__ == "__main__":
