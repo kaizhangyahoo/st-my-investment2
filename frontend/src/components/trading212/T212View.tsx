@@ -56,6 +56,11 @@ export const T212View: React.FC = () => {
 
   const [orderPeriod, setOrderPeriod] = useState<OrderPeriod>('ALL');
   const [orderSide, setOrderSide] = useState<'BUY' | 'SELL' | 'ALL'>('ALL');
+  // Empty is "no status filter", the same cleared state the side pills have. Multi-select because
+  // REJECTED and CANCELLED are two spellings of "nothing was bought", and reading them together is
+  // the natural question once you can filter on either.
+  const [orderStatuses, setOrderStatuses] = useState<string[]>([]);
+  const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [instrumentQuery, setInstrumentQuery] = useState('');
   const [selectedInstrumentKey, setSelectedInstrumentKey] = useState<string | null>(null);
   const [showInstrumentSuggestions, setShowInstrumentSuggestions] = useState(false);
@@ -229,7 +234,44 @@ export const T212View: React.FC = () => {
       : !normalizedQuery || matchingKeys.has(o.ticker)
   );
   const periodOrders = instrumentOrders.filter((o) => inPeriod(o, orderPeriod));
-  const filteredOrders = periodOrders.filter((o) => orderSide === 'ALL' || o.side === orderSide);
+  const sideOrders = periodOrders.filter((o) => orderSide === 'ALL' || o.side === orderSide);
+  const filteredOrders = sideOrders.filter(
+    (o) => orderStatuses.length === 0 || orderStatuses.includes(o.status)
+  );
+
+  // Read off the data rather than hard-coded, so a status Trading 212 starts returning appears on
+  // its own. Counted over every row and ordered by frequency, so the menu never reshuffles or drops
+  // an entry -- including a selected one -- as the other filters narrow; a zero then reads as
+  // "none in this selection" instead of the option vanishing.
+  const statusOptions = useMemo(() => {
+    const totals = new Map<string, number>();
+    orderItems.forEach((o) => {
+      if (o.status) totals.set(o.status, (totals.get(o.status) ?? 0) + 1);
+    });
+    return Array.from(totals.keys()).sort(
+      (a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0) || a.localeCompare(b)
+    );
+  }, [orderItems]);
+
+  // Counted after the instrument, period and side filters and before this one, which is the
+  // cascade the period and side pills already follow: each count is what clicking would yield.
+  const statusCounts = sideOrders.reduce<Record<string, number>>((acc, o) => {
+    acc[o.status] = (acc[o.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const toggleStatus = (status: string) =>
+    setOrderStatuses((current) =>
+      current.includes(status) ? current.filter((s) => s !== status) : [...current, status]
+    );
+
+  // A filled order can arrive as many tranches, so the counts above are rows and not orders. The
+  // gap is not cosmetic: 95 filled rows in this account are 40 orders, which is what makes FILLED
+  // look like the commonest outcome when by order it is REJECTED. Only fills split this way, so the
+  // overstatement lands on one option and the caption under the table has to say so.
+  const rowsPerOrder = new Map<string, number>();
+  filteredOrders.forEach((o) => rowsPerOrder.set(o.id, (rowsPerOrder.get(o.id) ?? 0) + 1));
+  const largestFanOut = Math.max(1, ...rowsPerOrder.values());
 
   /* ── Instrument inspector ──────────────────────────────────────────────────────────── */
 
@@ -748,6 +790,86 @@ export const T212View: React.FC = () => {
                 SELL ({periodOrders.filter((o) => o.side === 'SELL').length})
               </button>
             </div>
+
+            {/* Status filter: a menu rather than pills, so a fourth status needs no layout change */}
+            {statusOptions.length > 0 && (
+              <div
+                className="relative"
+                // Closes when focus leaves the whole group, which a plain blur on the button would
+                // not survive: ticking a box moves focus inside and must keep the menu open.
+                onBlur={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                    setShowStatusMenu(false);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setShowStatusMenu(false);
+                }}
+              >
+                <button
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={showStatusMenu}
+                  onClick={() => setShowStatusMenu((open) => !open)}
+                  title="Filter by order status. Combines with the side pills, so BUY plus REJECTED shows only rejected buys. Counts are rows, and a filled order can be several rows."
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded bg-surface-container-lowest border font-label-caps text-label-caps transition-colors ${
+                    orderStatuses.length > 0
+                      ? 'border-primary text-primary font-bold'
+                      : 'border-surface-container text-outline hover:text-on-surface'
+                  }`}
+                >
+                  STATUS
+                  {orderStatuses.length > 0 && ` (${orderStatuses.length})`}
+                  <span className="material-symbols-outlined text-[14px]">
+                    {showStatusMenu ? 'arrow_drop_up' : 'arrow_drop_down'}
+                  </span>
+                </button>
+                {showStatusMenu && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 z-20 mt-1 min-w-[11rem] rounded border border-surface-container-high bg-surface-container-lowest shadow-lg py-1"
+                  >
+                    {statusOptions.map((status) => {
+                      const checked = orderStatuses.includes(status);
+                      return (
+                        <button
+                          key={status}
+                          type="button"
+                          role="menuitemcheckbox"
+                          aria-checked={checked}
+                          onClick={() => toggleStatus(status)}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 font-data-mono-sm text-xs text-left hover:bg-surface-container-high"
+                        >
+                          <span
+                            className={`material-symbols-outlined text-[15px] ${
+                              checked ? 'text-primary' : 'text-outline'
+                            }`}
+                          >
+                            {checked ? 'check_box' : 'check_box_outline_blank'}
+                          </span>
+                          <span
+                            className={`flex-1 ${checked ? 'text-on-surface' : 'text-on-surface-variant'}`}
+                          >
+                            {status}
+                          </span>
+                          <span className="text-outline">{statusCounts[status] ?? 0}</span>
+                        </button>
+                      );
+                    })}
+                    {orderStatuses.length > 0 && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => setOrderStatuses([])}
+                        className="w-full mt-1 pt-1.5 px-2 pb-0.5 border-t border-surface-container/60 text-left font-label-caps text-[10px] text-outline hover:text-on-surface"
+                      >
+                        CLEAR — SHOW ALL
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -838,7 +960,19 @@ export const T212View: React.FC = () => {
             <div className="py-6 text-center font-body-sm text-xs text-outline">
               {orderItems.length === 0
                 ? 'No order history loaded — sync with an API key to pull live executions.'
-                : `No matching orders in ${orderPeriod === 'QUARTER' ? quarterLabel : orderPeriod === 'YEAR' ? 'the current year' : 'this selection'} — try a wider period.`}
+                : orderStatuses.length > 0
+                  ? // Pointing at the period would misdirect: a status this narrow is the likelier
+                    // cause, and CANCELLED is 5 rows of 158 here.
+                    `No ${orderStatuses.join(' or ')} orders in this selection — try clearing the status filter or widening the period.`
+                  : `No matching orders in ${orderPeriod === 'QUARTER' ? quarterLabel : orderPeriod === 'YEAR' ? 'the current year' : 'this selection'} — try a wider period.`}
+            </div>
+          )}
+
+          {rowsPerOrder.size < filteredOrders.length && (
+            <div className="mt-space-sm pt-2 border-t border-surface-container/30 font-data-mono-sm text-[10px] text-outline">
+              These {filteredOrders.length} rows are individual fills from {rowsPerOrder.size}{' '}
+              orders — the largest filled in {largestFanOut} tranches. Only filled orders split like
+              this, so the status counts overstate FILLED against REJECTED and CANCELLED.
             </div>
           )}
         </div>
