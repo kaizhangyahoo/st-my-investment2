@@ -145,10 +145,21 @@ def configure_logging() -> None:
     root.setLevel(level)
 
     otel = build_otel_handler(settings)
+    startup_logger = logging.getLogger("app.startup")
     if otel is not None:
         otel._pa_owned = True  # type: ignore[attr-defined]
         otel.addFilter(RequestContextFilter())
         root.addHandler(otel)
+        startup_logger.info(
+            "Grafana Cloud OTLP log export enabled -> %s (service: %s, protocol: %s)",
+            settings.OTEL_EXPORTER_OTLP_ENDPOINT,
+            settings.OTEL_SERVICE_NAME,
+            # settings.OTEL_EXPORTER_OTLP_PROTOCOL,
+            otel._pa_protocol, # type: ignore[attr-defined]
+        )
+    else:
+        if not (settings.OTEL_EXPORTER_OTLP_ENDPOINT or settings.OTEL_EXPORTER_OTLP_HEADERS):
+            startup_logger.info("OTLP log export is inactive (local stdout logging only)")
 
     # The access line is re-emitted by our own middleware with latency and a request id, so
     # uvicorn's version would only duplicate it. Startup/shutdown errors are still wanted,

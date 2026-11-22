@@ -22,3 +22,4 @@ import os
 # Keep the suite offline even when backend/.env configures a Grafana endpoint: an env var
 # beats the .env file in pydantic-settings, and this runs before any backend import.
 os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
+os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = ""

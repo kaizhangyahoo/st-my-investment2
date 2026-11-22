@@ -9,6 +9,8 @@ class ClientLogEntry(BaseModel):
     view: Optional[str] = Field(default=None, max_length=64)
     path: Optional[str] = Field(default=None, max_length=256)
     request_id: Optional[str] = Field(default=None, max_length=64)
+    # W3C trace id the browser also sent as `traceparent`, linking this entry to Tempo.
+    trace_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     stack: Optional[str] = Field(default=None, max_length=4000)
     # A deduplicated client-side entry stands in for `count` occurrences.
     count: int = Field(default=1, ge=1, le=1000)

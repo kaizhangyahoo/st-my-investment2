@@ -68,4 +68,19 @@ class RequestContextFilter(logging.Filter):
         record.request_id = _request_id.get()
         record.trace = _trace.get()
         record.span = _span.get()
+        if record.trace is None:
+            record.trace, record.span = _otel_ids()
         return True
+
+
+def _otel_ids() -> Tuple[Optional[str], Optional[str]]:
+    """The active OpenTelemetry span's ids, so local (non-Cloud Run) log lines carry the
+    same trace id that Tempo shows."""
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        return None, None
+    ctx = trace.get_current_span().get_span_context()
+    if not ctx.is_valid:
+        return None, None
+    return trace.format_trace_id(ctx.trace_id), trace.format_span_id(ctx.span_id)

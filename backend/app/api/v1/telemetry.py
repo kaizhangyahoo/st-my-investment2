@@ -91,6 +91,8 @@ async def ingest_client_logs(
                 },
                 "user_hash": user_hash,
                 "user_agent": user_agent,
+                # Top-level and primitive so Grafana can link the line to its Tempo trace.
+                "client_trace_id": entry.trace_id,
             },
         )
     return Response(status_code=204)

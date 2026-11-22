@@ -8,7 +8,7 @@ numpy>=1.24.0
 requests>=2.31.0
 
 # Observability. Log export is active only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
-# distro and the instrumentations are not used yet; they are here for traces/metrics later.
+# Traces use the fastapi and requests instrumentations; distro is kept for metrics later.
 opentelemetry-sdk>=1.30.0
 opentelemetry-exporter-otlp>=1.30.0
 opentelemetry-distro>=0.51b0

@@ -16,6 +16,7 @@ interface Entry {
   view?: string;
   path?: string;
   request_id?: string;
+  trace_id?: string;
   stack?: string;
   count: number;
 }
@@ -35,6 +36,16 @@ const SESSION_ID =
 let queue: Entry[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 let currentView: string | undefined;
+
+// W3C trace context without an SDK: random hex ids, a new trace per request. Nothing here
+// reports the parent span, so a trace shared between requests would never get a root and would
+// grow for as long as the tab stayed open. One trace per request keeps each one closed and
+// makes a latency figure mean something.
+const randomHex = (bytes: number) =>
+  Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
+
+/** A `traceparent` header value for one outgoing API call. Call it per request, not per view. */
+export const newTraceparent = () => `00-${randomHex(16)}-${randomHex(8)}-01`;
 
 // Strip credentials a message might carry (an axios error can embed a URL with a key).
 const scrub = (text: string) =>

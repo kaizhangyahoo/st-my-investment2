@@ -8,8 +8,10 @@ import json
 import logging
 import re
 import time
+import traceback
 from typing import Dict
 
+from backend.app.core.redaction import redact
 from backend.app.core.request_context import (
     bind_request,
     new_request_id,
@@ -35,6 +37,27 @@ def error_detail(scope) -> str:
 
 def _headers(scope) -> Dict[str, str]:
     return {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+
+
+def record_span_exception(exc: BaseException) -> None:
+    """Attach the traceback to the active trace span, if tracing is on.
+
+    OpenTelemetry's own ExceptionHandlerMiddleware wraps *outside* this middleware, so it never
+    sees an exception handled here -- the span would reach Tempo marked ERROR by its 500 status
+    with no stack on it. The message and stacktrace are redacted like every other sink: a
+    `requests` error repr embeds the full URL, provider key included.
+    """
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        return
+    trace.get_current_span().record_exception(
+        exc,
+        attributes={
+            "exception.message": redact(str(exc)),
+            "exception.stacktrace": redact("".join(traceback.format_exception(exc))),
+        },
+    )
 
 
 class RequestContextMiddleware:
@@ -71,7 +94,7 @@ class RequestContextMiddleware:
         started = time.perf_counter()
         try:
             await self.app(scope, receive, send_wrapper)
-        except Exception:
+        except Exception as exc:
             # Handled here rather than by an app-level Exception handler: Starlette runs those
             # in ServerErrorMiddleware, outside this one, after the request id is unbound --
             # so the 500 a user quotes would carry no id. The error is logged with it bound.
@@ -80,6 +103,7 @@ class RequestContextMiddleware:
                 scope.get("method", ""),
                 scope.get("path", ""),
             )
+            record_span_exception(exc)
             if should_log:
                 self._log(scope, headers, 500, time.perf_counter() - started)
             if status_holder["started"]:

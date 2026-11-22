@@ -9,7 +9,7 @@ import {
   UploadResult,
   UserProfile,
 } from '../types';
-import { logger } from './logger';
+import { logger, newTraceparent } from './logger';
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -25,12 +25,14 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  config.headers.traceparent = newTraceparent();
   return config;
 });
 
 // One log entry per failed API call, carrying the backend's X-Request-ID so the browser entry
-// and the server's access line can be joined. Path only: params can carry tickers or keys, and
-// headers are never read (the Trading 212 routes send credentials in them).
+// and the server's access line can be joined, plus the trace id this very request sent so the
+// entry links to its own Tempo span. Path only: params can carry tickers or keys, and no other
+// header is read (the Trading 212 routes send credentials in them).
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -38,10 +40,13 @@ api.interceptors.response.use(
     const method = (error?.config?.method ?? 'get').toUpperCase();
     const path = `${error?.config?.baseURL ?? ''}${error?.config?.url ?? ''}`.split('?')[0];
     const requestId: string | undefined = error?.response?.headers?.['x-request-id'];
+    // traceparent is `00-<trace id>-<span id>-<flags>`.
+    const traceId: string | undefined = (error?.config?.headers?.traceparent as string | undefined)?.split('-')[1];
     const outcome = status ? `HTTP ${status}` : error?.code === 'ECONNABORTED' ? 'timeout' : 'network error';
     const message = `${method} ${path} failed: ${outcome}`;
-    if (!status || status >= 500) logger.error(message, undefined, { request_id: requestId });
-    else logger.warn(message, undefined, { request_id: requestId });
+    const extra = { request_id: requestId, trace_id: traceId };
+    if (!status || status >= 500) logger.error(message, undefined, extra);
+    else logger.warn(message, undefined, extra);
     return Promise.reject(error);
   },
 );

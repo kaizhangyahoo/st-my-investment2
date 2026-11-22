@@ -8,8 +8,14 @@ try:
 except ImportError:  # pragma: no cover
     TestClient = None
 
-from backend.app.core import redaction
-from backend.app.core.otel_logs import RedactingOTelHandler, parse_kv
+from backend.app.core import otel_logs, redaction
+from backend.app.core.otel_logs import (
+    RedactingOTelHandler,
+    _build_exporter,
+    build_otel_handler,
+    parse_kv,
+    resolve_protocol,
+)
 
 
 def _app():
@@ -121,6 +127,113 @@ class TestParseKv(unittest.TestCase):
             OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic MTIzNDU2Nzg6Z2xjX3NlY3JldA=="
 
         self.assertIn("MTIzNDU2Nzg6Z2xjX3NlY3JldA==", redaction.collect_secret_literals(S()))
+
+
+class TestProtocolSelection(unittest.TestCase):
+    """Exporter construction opens no connection, so these stay offline."""
+
+    ENDPOINT = "https://gw.invalid/otlp"
+    LOGGER = "backend.app.core.otel_logs"
+
+    def test_an_unset_protocol_defaults_to_http_without_complaint(self):
+        with self.assertNoLogs(self.LOGGER, "WARNING"):
+            self.assertEqual(resolve_protocol(None), "http/protobuf")
+            self.assertEqual(resolve_protocol(""), "http/protobuf")
+
+    def test_the_value_is_trimmed_and_case_insensitive(self):
+        with self.assertNoLogs(self.LOGGER, "WARNING"):
+            self.assertEqual(resolve_protocol("  HTTP/PROTOBUF "), "http/protobuf")
+
+    def test_any_other_transport_is_refused_with_a_warning(self):
+        # grpc is the value most likely to be tried: nothing in this project receives OTLP over
+        # it, so it must be refused rather than quietly selecting a different exporter.
+        for value in ("grpc", "http/json"):
+            with self.subTest(value=value):
+                with self.assertLogs(self.LOGGER, "WARNING") as captured:
+                    self.assertEqual(resolve_protocol(value), "http/protobuf")
+                self.assertIn(value, captured.output[0])
+
+    def test_the_exporter_posts_to_the_logs_signal_path(self):
+        exporter = _build_exporter(self.ENDPOINT, {"x-extra": "1"})
+        self.assertIn(".proto.http.", type(exporter).__module__)
+        self.assertEqual(exporter._endpoint, f"{self.ENDPOINT}/v1/logs")
+
+
+class TestBuildOTelHandler(unittest.TestCase):
+    LOGGER = "backend.app.core.otel_logs"
+
+    class SettingsStub:
+        OTEL_EXPORTER_OTLP_ENDPOINT = None
+        OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf"
+        OTEL_EXPORTER_OTLP_HEADERS = None
+        OTEL_RESOURCE_ATTRIBUTES = None
+        OTEL_SERVICE_NAME = "test-service"
+        ENVIRONMENT = "test"
+
+    def _close_provider_afterwards(self):
+        """A successful build leaves a live batch worker and an atexit hook in a module global."""
+        def close():
+            if otel_logs._provider is not None:
+                otel_logs._provider.shutdown()
+                otel_logs._provider = None
+        self.addCleanup(close)
+
+    def test_offline_mode_returns_none_without_warning(self):
+        s = self.SettingsStub()
+        with self.assertNoLogs(self.LOGGER, "WARNING"):
+            handler = build_otel_handler(s)
+        self.assertIsNone(handler)
+
+    def test_headers_without_endpoint_warns_developer(self):
+        s = self.SettingsStub()
+        s.OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic abc"
+        with self.assertLogs(self.LOGGER, "WARNING") as captured:
+            handler = build_otel_handler(s)
+        self.assertIsNone(handler)
+        self.assertIn("OTEL_EXPORTER_OTLP_ENDPOINT is missing", captured.output[0])
+
+    def test_grafana_endpoint_without_auth_header_warns_developer(self):
+        s = self.SettingsStub()
+        # Unroutable, so the built exporter cannot reach the real gateway, while still matching
+        # the "grafana.net" substring the warning is keyed on.
+        s.OTEL_EXPORTER_OTLP_ENDPOINT = "https://gw.grafana.net.invalid/otlp"
+        s.OTEL_EXPORTER_OTLP_HEADERS = ""
+        self._close_provider_afterwards()
+        with self.assertLogs(self.LOGGER, "WARNING") as captured:
+            handler = build_otel_handler(s)
+        self.assertIsNotNone(handler)
+        self.assertIn("does not contain an Authorization header", captured.output[0])
+
+    def test_handler_carries_the_protocol_actually_exported_over(self):
+        s = self.SettingsStub()
+        s.OTEL_EXPORTER_OTLP_ENDPOINT = "https://gw.invalid/otlp"
+        s.OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic abc"
+        s.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc"
+        self._close_provider_afterwards()
+        with self.assertLogs(self.LOGGER, "WARNING"):
+            handler = build_otel_handler(s)
+        self.assertEqual(handler._pa_protocol, "http/protobuf")
+
+    def test_missing_package_logs_actionable_error(self):
+        s = self.SettingsStub()
+        s.OTEL_EXPORTER_OTLP_ENDPOINT = "https://gw.invalid/otlp"
+        s.OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic abc"
+        import builtins
+        orig_import = builtins.__import__
+
+        def failing_import(name, *args, **kwargs):
+            if "opentelemetry" in name:
+                raise ImportError(f"No module named {name}", name=name)
+            return orig_import(name, *args, **kwargs)
+
+        builtins.__import__ = failing_import
+        try:
+            with self.assertLogs(self.LOGGER, "ERROR") as captured:
+                handler = build_otel_handler(s)
+            self.assertIsNone(handler)
+            self.assertIn("pip install -r backend/requirements.txt", captured.output[0])
+        finally:
+            builtins.__import__ = orig_import
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from backend.app.core.config import settings
 from backend.app.core.errors import install_exception_handlers
 from backend.app.core.logging_config import configure_logging
 from backend.app.core.middleware import RequestContextMiddleware
+from backend.app.core.otel_traces import instrument_app
 from backend.app.api.v1 import auth, portfolio, trades, tickers, market_data, telemetry, trading212
 
 # Before the app exists, so module-level logging in the routers below is already formatted.
@@ -33,6 +34,11 @@ app.add_middleware(
 app.add_middleware(RequestContextMiddleware)
 
 install_exception_handlers(app)
+
+# No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set. The request span wraps the whole middleware
+# stack whatever the call order here: the instrumentation patches build_middleware_stack rather
+# than calling add_middleware. So the access line and every app log land inside the span.
+instrument_app(app, settings)
 
 # API Routers
 app.include_router(auth.router, prefix=settings.API_V1_STR)

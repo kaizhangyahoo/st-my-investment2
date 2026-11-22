@@ -11,6 +11,7 @@ and then 402s every symbol, and TwelveData's free tier forces a 60s wait between
 API keys come from backend/.env via `settings`. All HTTP calls have timeouts
 and failures are isolated per ticker/provider.
 """
+import contextvars
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -206,8 +207,17 @@ def get_prices(tickers: List[str]) -> Tuple[Dict[str, Optional[float]], List[Dic
     if not tickers:
         return prices, failures
 
+    # A copy of the caller's context per task. Neither the active trace nor the request id
+    # crosses a thread boundary on its own, so a plain pool.map leaves these fetches as orphan
+    # root traces and their log lines uncorrelated. One copy each: a Context cannot be entered
+    # twice concurrently.
     with ThreadPoolExecutor(max_workers=_MAX_PARALLEL_FETCHES) as pool:
-        for ticker, (price, failure) in zip(tickers, pool.map(_yahoo_price_or_failure, tickers)):
+        pending = [
+            pool.submit(contextvars.copy_context().run, _yahoo_price_or_failure, ticker)
+            for ticker in tickers
+        ]
+        for ticker, future in zip(tickers, pending):
+            price, failure = future.result()
             prices[ticker] = price
             if failure:
                 failures.append(failure)
