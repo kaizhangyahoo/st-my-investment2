@@ -154,7 +154,8 @@ def configure_logging() -> None:
             "Grafana Cloud OTLP log export enabled -> %s (service: %s, protocol: %s)",
             settings.OTEL_EXPORTER_OTLP_ENDPOINT,
             settings.OTEL_SERVICE_NAME,
-            settings.OTEL_EXPORTER_OTLP_PROTOCOL,
+            # settings.OTEL_EXPORTER_OTLP_PROTOCOL,
+            otel._pa_protocol, # type: ignore[attr-defined]
         )
     else:
         if not (settings.OTEL_EXPORTER_OTLP_ENDPOINT or settings.OTEL_EXPORTER_OTLP_HEADERS):

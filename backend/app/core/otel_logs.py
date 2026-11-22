@@ -144,4 +144,6 @@ def build_otel_handler(settings) -> Optional[logging.Handler]:
     _provider = LoggerProvider(resource=Resource.create(attributes))
     _provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
     atexit.register(_provider.shutdown)
-    return RedactingOTelHandler(LoggingHandler(logger_provider=_provider))
+    handler = RedactingOTelHandler(LoggingHandler(logger_provider=_provider))
+    handler._pa_protocol = protocol
+    return handler
