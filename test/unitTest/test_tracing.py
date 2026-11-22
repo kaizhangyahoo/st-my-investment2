@@ -13,7 +13,7 @@ try:
 except ImportError:  # pragma: no cover
     TestClient = None
 
-from backend.app.core import otel_traces
+from backend.app.core import otel_traces, request_context
 from backend.app.core.request_context import RequestContextFilter
 
 
@@ -62,7 +62,8 @@ class TestRequestSpans(unittest.TestCase):
         def ok():
             record = logging.LogRecord("t", logging.INFO, "", 0, "m", None, None)
             RequestContextFilter().filter(record)
-            self.seen["trace"] = record.trace
+            self.seen["trace_id"] = record.trace_id
+            self.seen["span_id"] = record.span_id
             return {"ok": True}
 
         self.provider = otel_traces.instrument_app(app, _settings(), exporter=self.exporter)
@@ -84,7 +85,7 @@ class TestRequestSpans(unittest.TestCase):
         # One span, not three: `http send` and `http receive` children are excluded.
         self.assertEqual(len(spans), 1)
         self.assertEqual(format(spans[0].context.trace_id, "032x"), self.TRACE_ID)
-        self.assertEqual(self.seen["trace"], self.TRACE_ID)
+        self.assertEqual(self.seen["trace_id"], self.TRACE_ID)
         self.assertEqual(spans[0].resource.attributes["service.name"], "test-svc")
 
     def test_a_provider_key_in_an_outbound_url_never_reaches_a_span(self):
@@ -113,6 +114,77 @@ class TestRequestSpans(unittest.TestCase):
         # The patterns are matched with re.search, so an unanchored `health` would swallow this.
         self.client.get("/api/portfolio/health-check")
         self.assertEqual(len(self.exporter.get_finished_spans()), 1)
+
+
+@unittest.skipIf(TestClient is None, "fastapi / opentelemetry sdk unavailable")
+class TestLogTraceJoin(unittest.TestCase):
+    """Which id a log line carries when both sources are available.
+
+    Needs the real middleware, not just a provider: without it nothing ever binds the
+    header, so both orderings would agree and the test could not fail.
+    """
+
+    CLOUD_TRACE = "105445aa7843bc8bf206b12000100000"
+
+    def setUp(self):
+        from backend.app.core.middleware import RequestContextMiddleware
+
+        self.exporter = InMemorySpanExporter()
+        app = FastAPI()
+        self.seen = {}
+
+        @app.get("/api/ok")
+        def ok():
+            record = logging.LogRecord("t", logging.INFO, "", 0, "m", None, None)
+            RequestContextFilter().filter(record)
+            self.seen["trace_id"] = record.trace_id
+            self.seen["span_id"] = record.span_id
+            return {"ok": True}
+
+        # Production order from main.py: add_middleware first, instrument_app last, so the
+        # server span is already open when the middleware binds the header.
+        app.add_middleware(RequestContextMiddleware)
+        self.provider = otel_traces.instrument_app(app, _settings(), exporter=self.exporter)
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        from opentelemetry.instrumentation.requests import RequestsInstrumentor
+        RequestsInstrumentor().uninstrument()
+        self.provider.shutdown()
+        otel_traces._provider = None
+
+    def test_the_active_span_outranks_the_cloud_run_trace_header(self):
+        """The production-only failure: Cloud Run always sends this header, so preferring it
+        stamped every log line with an id that no span in Tempo carries."""
+        res = self.client.get(
+            "/api/ok", headers={"x-cloud-trace-context": f"{self.CLOUD_TRACE}/1;o=1"}
+        )
+        self.assertEqual(res.status_code, 200)
+        spans = self.exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        self.assertNotEqual(self.seen["trace_id"], self.CLOUD_TRACE)
+        self.assertEqual(self.seen["trace_id"], format(spans[0].context.trace_id, "032x"))
+        self.assertEqual(self.seen["span_id"], format(spans[0].context.span_id, "016x"))
+
+
+class TestCorrelationIdShape(unittest.TestCase):
+    def test_the_header_is_used_when_no_span_is_active(self):
+        record = logging.LogRecord("t", logging.INFO, "", 0, "m", None, None)
+        with mock.patch.object(request_context, "_otel_ids", lambda: (None, None)):
+            tokens = request_context.bind_request("req1", "abc123", "def456")
+            try:
+                RequestContextFilter().filter(record)
+            finally:
+                request_context.reset_request(tokens)
+        self.assertEqual(record.trace_id, "abc123")
+        self.assertEqual(record.span_id, "def456")
+
+    def test_the_ids_are_absent_rather_than_stale_outside_a_request(self):
+        record = logging.LogRecord("t", logging.INFO, "", 0, "m", None, None)
+        with mock.patch.object(request_context, "_otel_ids", lambda: (None, None)):
+            RequestContextFilter().filter(record)
+        self.assertIsNone(record.trace_id)
+        self.assertIsNone(record.span_id)
 
 
 @unittest.skipIf(TestClient is None, "fastapi / opentelemetry sdk unavailable")

@@ -66,10 +66,15 @@ class RequestContextFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = _request_id.get()
-        record.trace = _trace.get()
-        record.span = _span.get()
-        if record.trace is None:
-            record.trace, record.span = _otel_ids()
+        # The active span wins over the inbound Cloud Run header, and not the other way round:
+        # a span only ever reaches Tempo under its OTel ids, so a line stamped with the
+        # header's id would not join to it. Cloud Run always sends that header, so the wrong
+        # order breaks joining in production exclusively -- every local test still passes.
+        trace_id, span_id = _otel_ids()
+        if trace_id is None:
+            trace_id, span_id = _trace.get(), _span.get()
+        record.trace_id = trace_id
+        record.span_id = span_id
         return True
 
 

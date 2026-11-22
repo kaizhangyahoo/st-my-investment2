@@ -24,7 +24,7 @@ _RESERVED = frozenset({
     "args", "asctime", "created", "exc_info", "exc_text", "filename", "funcName",
     "levelname", "levelno", "lineno", "module", "msecs", "message", "msg", "name",
     "pathname", "process", "processName", "relativeCreated", "stack_info", "taskName",
-    "thread", "threadName", "request_id", "trace", "span", "http_request",
+    "thread", "threadName", "request_id", "trace_id", "span_id", "http_request",
 })
 
 _SEVERITY = {
@@ -56,14 +56,16 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
         }
 
-        trace = getattr(record, "trace", None)
+        trace_id = getattr(record, "trace_id", None)
         # A bare trace id is not useful to Cloud Logging, and a malformed resource name is
         # worse than none, so the field is omitted unless the project is known.
-        if trace and self._project_id:
-            payload["logging.googleapis.com/trace"] = f"projects/{self._project_id}/traces/{trace}"
-            span = getattr(record, "span", None)
-            if span:
-                payload["logging.googleapis.com/spanId"] = span
+        if trace_id and self._project_id:
+            payload["logging.googleapis.com/trace"] = (
+                f"projects/{self._project_id}/traces/{trace_id}"
+            )
+            span_id = getattr(record, "span_id", None)
+            if span_id:
+                payload["logging.googleapis.com/spanId"] = span_id
 
         payload["logging.googleapis.com/sourceLocation"] = {
             "file": record.pathname,

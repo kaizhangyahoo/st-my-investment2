@@ -131,7 +131,7 @@ class TestProviderFanOutSpans(_TracedApp):
         def capture(ticker):
             record = logging.LogRecord("t", logging.INFO, "", 0, "m", None, None)
             RequestContextFilter().filter(record)
-            seen.append((record.request_id, record.trace))
+            seen.append((record.request_id, record.trace_id))
             return 10.0
 
         with mock.patch.object(price_service, "fetch_yahoo_price", capture):
