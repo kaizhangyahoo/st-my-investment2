@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { portfolioApi } from '../../services/api';
+import { logger } from '../../services/logger';
 import { ChartTrade, PriceTradeChart } from './PriceTradeChart';
 import { compactGbp, CurrencyBreakdownPie, deriveCurrencyAllocation } from './CurrencyBreakdownPie';
 import { CashflowItem, FeedStatus, PortfolioSummary, Position, TradeActivityItem, UploadResult } from '../../types';
@@ -131,7 +132,7 @@ export const IgAnalyticsView: React.FC<IgAnalyticsViewProps> = ({
         if (!cancelled) setWaterfall({ status: 'ready', items });
       })
       .catch((err: any) => {
-        console.error('Failed to load cashflow waterfall', err);
+        logger.warn('Cashflow waterfall unavailable', err);
         if (!cancelled) setWaterfall({ status: 'error', message: err?.message ?? 'unknown error' });
       });
     return () => {

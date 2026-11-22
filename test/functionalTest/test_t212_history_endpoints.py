@@ -103,12 +103,36 @@ class TestOrdersEndpoint(EndpointCase):
 
         self.serve(Boom(order_pages=[page([filled_order()])]))
 
-        # The handler prints the traceback by design; swallowed so a passing run stays readable.
-        with patch.object(endpoint.traceback, "print_exc"), self.assertRaises(Exception) as caught:
-            endpoint.get_orders(x_t212_key="bad", x_t212_secret="bad", user=USER)
+        # assertLogs both silences the traceback and proves the error was recorded.
+        with self.assertLogs("backend.app.api.v1.trading212", level="ERROR") as captured:
+            with self.assertRaises(Exception) as caught:
+                endpoint.get_orders(x_t212_key="bad", x_t212_secret="bad", user=USER)
 
         self.assertEqual(getattr(caught.exception, "status_code", None), 400)
-        self.assertIn("401", str(getattr(caught.exception, "detail", "")))
+
+        # The provider's own text is for the log, not the client: it can carry upstream detail
+        # the browser has no business rendering.
+        detail = str(getattr(caught.exception, "detail", ""))
+        self.assertNotIn("401", detail)
+        self.assertIn("Trading 212 request failed", detail)
+        self.assertIn("401 Unauthorized", "\n".join(captured.output))
+
+    def test_the_missing_credentials_message_still_reaches_the_user(self):
+        # Unlike a provider error, this one is actionable UI text and is surfaced verbatim.
+        self.serve(FakeT212Client(order_pages=[page([filled_order()])]))
+
+        with patch.object(endpoint, "fetch_t212_orders", side_effect=ValueError(
+            "Trading 212 API key and secret are required"
+        )):
+            with self.assertLogs("backend.app.api.v1.trading212", level="ERROR"):
+                with self.assertRaises(Exception) as caught:
+                    endpoint.get_orders(x_t212_key=None, x_t212_secret=None, user=USER)
+
+        self.assertEqual(getattr(caught.exception, "status_code", None), 400)
+        self.assertEqual(
+            getattr(caught.exception, "detail", ""),
+            "Trading 212 API key and secret are required",
+        )
 
 
 class TestDividendsEndpoint(EndpointCase):

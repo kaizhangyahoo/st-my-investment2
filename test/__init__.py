@@ -17,3 +17,8 @@ Browser-level end-to-end tests are not here: they live with the skill that owns 
 at `.agent/skills/playwright_testing/examples/`, and they target the legacy Streamlit
 app on port 8501 rather than this backend.
 """
+import os
+
+# Keep the suite offline even when backend/.env configures a Grafana endpoint: an env var
+# beats the .env file in pydantic-settings, and this runs before any backend import.
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = ""

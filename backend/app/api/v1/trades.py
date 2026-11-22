@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from typing import List, Dict, Any, Optional, Tuple
+import logging
 import pandas as pd
 import io
 import os
@@ -12,8 +13,11 @@ from backend.app.services.realised_pnl import CORPORATE_ACTION
 from backend.app.services.ticker_service import find_unresolved_symbols, load_ticker_mappings, resolve_ticker
 from backend.app.schemas.portfolio import PortfolioSummary, CashflowItem, TradeActivityItem
 from backend.app.core.security import get_current_user
+from backend.app.core.diagnostics import log_data_quality
 
 router = APIRouter(prefix="/trades", tags=["trades"])
+
+logger = logging.getLogger(__name__)
 
 # In-memory store for uploaded trade data per session/demo
 _LAST_TRADE_DF: Dict[str, pd.DataFrame] = {}
@@ -158,6 +162,7 @@ def extract_trade_activities(df: pd.DataFrame, limit: Optional[int] = None) -> L
             })
         return activities
     except Exception:
+        logger.exception("Could not build the trade activity list; the blotter will be empty")
         return []
 
 def get_or_load_trade_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
@@ -183,11 +188,15 @@ def get_or_load_trade_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Optional
                 try:
                     _LAST_TRANSACTION_DF[user_id] = pd.read_csv(latest_trans)
                     _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "Could not autoload transaction statement %s: %s",
+                        os.path.basename(latest_trans), e,
+                    )
+            logger.info("Autoloaded trade statement %s from ~/Downloads", os.path.basename(latest_trade))
             return loaded_df, os.path.basename(latest_trade)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not autoload trade statement %s: %s", os.path.basename(latest_trade), e)
     return None, None
 
 @router.post("/upload")
@@ -214,6 +223,7 @@ async def upload_files(files: List[UploadFile] = File(...), user: dict = Depends
                 results["transaction_files"].append(f.filename)
                 uploaded_transaction = True
         except Exception as e:
+            logger.warning("Uploaded file %s could not be parsed: %s", f.filename, e)
             results["errors"].append(f"Failed to parse {f.filename}: {str(e)}")
 
     # If user explicitly uploaded only transaction files, clear old trade memory to trigger Scenario B
@@ -229,6 +239,14 @@ async def upload_files(files: List[UploadFile] = File(...), user: dict = Depends
     else:
         results["unresolved_symbols"] = []
 
+    logger.info(
+        "Statement upload: %d trade file(s), %d transaction file(s), %d error(s), %d unresolved symbol(s)",
+        len(results["trade_files"]),
+        len(results["transaction_files"]),
+        len(results["errors"]),
+        len(results["unresolved_symbols"]),
+        extra={"event": "trades.uploaded"},
+    )
     return results
 
 @router.get("/summary", response_model=PortfolioSummary)
@@ -263,6 +281,7 @@ def get_portfolio_summary(user: dict = Depends(get_current_user)):
     res["trade_activities"] = extract_trade_activities(df)
     res["missing_trade_history"] = False
     res["cash_balance"] = derive_cash_balance(_LAST_TRANSACTION_DF.get(user_id))
+    log_data_quality(logger, "trades.summary", res.get("data_quality") or {})
     return res
 
 def get_or_load_transaction_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
@@ -288,8 +307,10 @@ def get_or_load_transaction_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Op
             _LAST_TRANSACTION_DF[user_id] = df
             _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
             return df, _LAST_TRANSACTION_FILENAME[user_id]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Could not autoload transaction statement %s: %s", os.path.basename(latest_trans), e
+            )
     return None, None
 
 @router.get("/waterfall", response_model=List[CashflowItem])
@@ -308,4 +329,5 @@ def reset_portfolio(user: dict = Depends(get_current_user)):
     _LAST_TRADE_FILENAME.pop(user_id, None)
     _LAST_TRANSACTION_FILENAME.pop(user_id, None)
     _USER_MANUAL_UPLOAD.pop(user_id, None)
+    logger.info("Loaded statements reset", extra={"event": "trades.reset"})
     return {"status": "reset", "user_id": user_id}

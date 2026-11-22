@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { tickersApi, apiErrorMessage } from '../../services/api';
+import { logger } from '../../services/logger';
 import { UnresolvedSymbol } from '../../types';
 
 interface TickerMappingViewProps {
@@ -68,7 +69,7 @@ export const TickerMappingView: React.FC<TickerMappingViewProps> = ({
       setMappings(data);
       return data;
     } catch (err) {
-      console.error('Failed to load mappings', err);
+      logger.error('Ticker mappings could not be loaded', err);
       flash('error', apiErrorMessage(err, 'Failed to load mappings'));
       return null;
     } finally {
@@ -104,7 +105,7 @@ export const TickerMappingView: React.FC<TickerMappingViewProps> = ({
       })
       .catch((err) => {
         if (cancelled) return;
-        console.error('SEC resolution failed', err);
+        logger.warn('SEC ticker suggestions unavailable', err);
         setSuggestFailed(true);
       })
       .finally(() => {

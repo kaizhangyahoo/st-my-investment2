@@ -3,7 +3,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from backend.app.core.config import settings
-from backend.app.api.v1 import auth, portfolio, trades, tickers, market_data, trading212
+from backend.app.core.errors import install_exception_handlers
+from backend.app.core.logging_config import configure_logging
+from backend.app.core.middleware import RequestContextMiddleware
+from backend.app.api.v1 import auth, portfolio, trades, tickers, market_data, telemetry, trading212
+
+# Before the app exists, so module-level logging in the routers below is already formatted.
+configure_logging()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -18,7 +24,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Without this the browser cannot read the correlation id on a cross-origin response.
+    expose_headers=["X-Request-ID"],
 )
+
+# add_middleware inserts at position 0, so the last call is the outermost layer. This has to
+# wrap CORS for the request id to be bound before anything else can log.
+app.add_middleware(RequestContextMiddleware)
+
+install_exception_handlers(app)
 
 # API Routers
 app.include_router(auth.router, prefix=settings.API_V1_STR)
@@ -27,6 +41,7 @@ app.include_router(trades.router, prefix=settings.API_V1_STR)
 app.include_router(tickers.router, prefix=settings.API_V1_STR)
 app.include_router(market_data.router, prefix=settings.API_V1_STR)
 app.include_router(trading212.router, prefix=settings.API_V1_STR)
+app.include_router(telemetry.router, prefix=settings.API_V1_STR)
 
 @app.get("/health")
 def health_check():

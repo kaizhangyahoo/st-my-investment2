@@ -1,3 +1,4 @@
+import logging
 import pandas as pd
 import numpy as np
 import os
@@ -7,6 +8,8 @@ from typing import Dict, List, Any, Optional
 from backend.app.services.market_service import get_current_prices, get_historical_fx
 from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker, find_unresolved_symbols
 from backend.app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 def empty_data_quality() -> Dict[str, Any]:
     """The all-clear shape, for responses where no price fetch was attempted."""
@@ -65,9 +68,11 @@ def calculate_positions_from_df(df_trade_history: pd.DataFrame) -> Dict[str, Any
 
     unpriced = sorted(str(t) for t in grouped.index[grouped['Current Price'] == 0])
     if unpriced:
-        print(
-            f"No price from any provider for {len(unpriced)} ticker(s): {', '.join(unpriced)}. "
-            "Market value, P&L and totals are understated."
+        logger.warning(
+            "No price from any provider for %d ticker(s): %s. "
+            "Market value, P&L and totals are understated.",
+            len(unpriced),
+            ", ".join(unpriced),
         )
 
     # FX conversion

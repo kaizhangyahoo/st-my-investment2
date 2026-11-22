@@ -19,6 +19,7 @@ mislabelling is what made a cross-account total look reasonable (KAN-46). Writes
 merge before an atomic replace so a concurrent legacy run loses at most its own unflushed dates,
 not the whole file.
 """
+import logging
 import json
 import os
 import tempfile
@@ -31,6 +32,8 @@ from backend.app.core.config import settings
 from backend.app.services import fx_store
 from backend.app.services.market_service import get_historical_fx, get_price_history
 from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker
+
+logger = logging.getLogger(__name__)
 
 KEY_PREFIX = "ig:"
 
@@ -195,7 +198,12 @@ def _read_cache_file() -> Dict[str, Dict[str, float]]:
         with open(path, "r") as f:
             data = json.load(f)
     except (OSError, ValueError) as e:
-        print(f"Could not read {path}: {e}. Treating the history cache as empty.")
+        logger.warning(
+            "Could not read %s: %s. Treating the history cache as empty, so the whole "
+            "series recomputes from scratch.",
+            path,
+            e,
+        )
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -220,7 +228,12 @@ def _merge_and_write(key: str, new_values: Dict[str, float], replace: bool = Fal
             json.dump(data, f, indent=2)
         os.replace(tmp, path)
     except OSError as e:
-        print(f"Could not persist history cache to {path}: {e}")
+        logger.error(
+            "Could not persist history cache to %s: %s. This run's computed values are lost "
+            "and the next load recomputes them.",
+            path,
+            e,
+        )
         if os.path.exists(tmp):
             os.unlink(tmp)
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { portfolioApi } from '../../services/api';
+import { logger } from '../../services/logger';
 import {
   FeedState,
   MatchedBenchmarkResponse,
@@ -139,13 +140,13 @@ export const PerformanceBlotterView: React.FC = () => {
         try {
           setMetrics(await portfolioApi.getMetrics(data.account_id ?? accountId));
         } catch (metricsErr) {
-          console.error('Failed to load portfolio metrics', metricsErr);
+          logger.warn('Portfolio metrics unavailable; risk tiles show dashes', metricsErr);
           setMetrics(null);
         }
       } catch (err: any) {
         // Never swallowed: a silent failure used to be indistinguishable from a real series,
         // because this view substituted hardcoded sample points.
-        console.error('Failed to load portfolio history', err);
+        logger.error('Portfolio history unavailable; performance view is offline', err);
         setResponse(null);
         setMetrics(null);
         setStatus({

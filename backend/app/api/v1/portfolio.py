@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
+import logging
 import pandas as pd
 from backend.app.schemas.portfolio import (
     BenchmarkResponse,
@@ -11,6 +12,7 @@ from backend.app.schemas.portfolio import (
     PortfolioSummary,
 )
 from backend.app.core.security import get_current_user
+from backend.app.core.diagnostics import log_data_quality
 from backend.app.services import history_service, realised_pnl, risk_metrics
 from backend.app.services.benchmark_service import deposit_matched_series
 from backend.app.services.market_service import get_price_history
@@ -18,6 +20,8 @@ from backend.app.services.portfolio_engine import external_cashflows
 from backend.app.api.v1.trades import get_or_load_trade_df, get_or_load_transaction_df
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
+
+logger = logging.getLogger(__name__)
 
 # Withheld-reason codes turned into something a user can act on. The codes themselves are an
 # internal vocabulary shared by the engine and the benchmark service; the banner shows this text.
@@ -80,6 +84,13 @@ def compute_history(refresh: bool = False, user: dict = Depends(get_current_user
         }
     else:
         result = history_service.compute_history(df, key, force_recompute=refresh)
+        log_data_quality(logger, "portfolio.history.compute", result.get("data_quality") or {})
+        logger.info(
+            "History computed: %d point(s) stored (refresh=%s)",
+            len(result.get("points") or []),
+            refresh,
+            extra={"event": "portfolio.history.computed"},
+        )
     return {**result, "accounts": history_service.stored_accounts(), "account_id": key}
 
 @router.get("/metrics", response_model=PortfolioMetricsResponse)
@@ -138,6 +149,7 @@ def get_benchmark(
     """
     df, currency = get_price_history(symbol, start_date)
     if df.empty:
+        logger.warning("No benchmark closes for %s since %s; the overlay is unavailable", symbol, start_date)
         return {
             "symbol": symbol,
             "currency": currency,

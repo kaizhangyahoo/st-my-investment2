@@ -9,6 +9,7 @@ import {
   UploadResult,
   UserProfile,
 } from '../types';
+import { logger } from './logger';
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -26,6 +27,24 @@ api.interceptors.request.use((config) => {
   }
   return config;
 });
+
+// One log entry per failed API call, carrying the backend's X-Request-ID so the browser entry
+// and the server's access line can be joined. Path only: params can carry tickers or keys, and
+// headers are never read (the Trading 212 routes send credentials in them).
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status: number | undefined = error?.response?.status;
+    const method = (error?.config?.method ?? 'get').toUpperCase();
+    const path = `${error?.config?.baseURL ?? ''}${error?.config?.url ?? ''}`.split('?')[0];
+    const requestId: string | undefined = error?.response?.headers?.['x-request-id'];
+    const outcome = status ? `HTTP ${status}` : error?.code === 'ECONNABORTED' ? 'timeout' : 'network error';
+    const message = `${method} ${path} failed: ${outcome}`;
+    if (!status || status >= 500) logger.error(message, undefined, { request_id: requestId });
+    else logger.warn(message, undefined, { request_id: requestId });
+    return Promise.reject(error);
+  },
+);
 
 export const authApi = {
   login: async (email: string, password: string) => (await api.post('/auth/login', { email, password })).data,

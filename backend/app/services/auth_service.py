@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import requests
 from typing import Optional, Dict, Any
 from backend.app.core.config import settings
@@ -72,5 +73,8 @@ def log_login_event(user_email: str, provider: str = "unknown", user_name: Optio
         return fb_log(user_email=user_email, user_name=user_name, provider=provider, user_id=user_id)
     except Exception:
         # Graceful fallback if firebase-admin is unconfigured locally
+        logging.getLogger(__name__).warning(
+            "Login event not recorded in Firestore", exc_info=True
+        )
         return True
 

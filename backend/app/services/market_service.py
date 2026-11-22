@@ -1,3 +1,4 @@
+import logging
 import pandas as pd
 import requests
 from typing import Dict, List, Optional, Tuple
@@ -5,6 +6,8 @@ from datetime import datetime
 from backend.app.core.cache import MISS, cache, ttl_cache
 from backend.app.services import fx_store
 from backend.app.services.price_service import get_prices, fetch_yahoo_history
+
+logger = logging.getLogger(__name__)
 
 _FETCH_ERRORS = (requests.RequestException, ValueError, KeyError, IndexError, TypeError)
 
@@ -103,7 +106,9 @@ def get_historical_fx(start_date: str) -> Tuple[Dict[str, pd.Series], bool]:
             fetched[pair] = rates
         except _FETCH_ERRORS as e:
             incomplete = True
-            print(f"Error fetching FX data for {pair}: {e}.")
+            logger.warning(
+                "Error fetching FX data for %s: %s. Stored history will be used instead.", pair, e
+            )
 
     if fetched:
         fx_store.merge_rates(fetched)
@@ -119,10 +124,12 @@ def get_historical_fx(start_date: str) -> Tuple[Dict[str, pd.Series], bool]:
         for pair in fx_store.PAIRS
     }
     if any(not rates for rates in combined.values()):
-        print(
+        logger.error(
             "No stored FX history to fall back on. Using approximate rates "
-            f"(GBPUSD={_FALLBACK_GBPUSD}, GBPEUR={_FALLBACK_GBPEUR}); "
-            "every non-GBP valuation is now an estimate, not a real quote."
+            "(GBPUSD=%s, GBPEUR=%s); every non-GBP valuation is now an estimate, "
+            "not a real quote.",
+            _FALLBACK_GBPUSD,
+            _FALLBACK_GBPEUR,
         )
         dates = pd.date_range(start=start_date, end=datetime.now())
         return {
@@ -140,7 +147,7 @@ def _fetch_ohlc(ticker: str, start_date: str) -> Optional[pd.DataFrame]:
     try:
         return fetch_yahoo_history(ticker, start_date)
     except _FETCH_ERRORS as e:
-        print(f"Error fetching OHLC for {ticker}: {e}")
+        logger.debug("Error fetching OHLC for %s: %s", ticker, e)
         return None
 
 
@@ -161,7 +168,7 @@ def _fetch_price_history(
     try:
         df = fetch_yahoo_history(ticker, start_date)
     except _FETCH_ERRORS as e:
-        print(f"Error fetching price history for {ticker}: {e}")
+        logger.debug("Error fetching price history for %s: %s", ticker, e)
         return None
     return df[['Date', 'close']], df.attrs.get("currency")
 

@@ -7,6 +7,7 @@ import { TickerMappingView } from '../tickers/TickerMappingView';
 import { PerformanceBlotterView } from './PerformanceBlotterView';
 import { UnresolvedSymbolsModal } from '../tickers/UnresolvedSymbolsModal';
 import { portfolioApi } from '../../services/api';
+import { logger } from '../../services/logger';
 import { PortfolioSummary, UnresolvedSymbol, UploadResult, FeedStatus } from '../../types';
 
 const deriveFeedStatus = (data: PortfolioSummary): FeedStatus => {
@@ -54,7 +55,7 @@ export const Dashboard: React.FC = () => {
     } catch (err: any) {
       // Must not be swallowed: a silent failure is indistinguishable from loading, which is
       // what let sample data sit on screen looking real.
-      console.error('Failed to load live portfolio summary', err);
+      logger.error('Live portfolio summary unavailable; sample data is on screen', err);
       setFeed({
         state: 'offline',
         detail: [
@@ -70,6 +71,10 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    logger.setView(activeTab);
+  }, [activeTab]);
 
   // Unmapped names send the user straight to Reference Data, where SEC suggestions load
   // automatically. Valuation proceeds meanwhile with those rows excluded; saving a mapping
@@ -93,7 +98,7 @@ export const Dashboard: React.FC = () => {
     try {
       await portfolioApi.reset();
     } catch (err) {
-      console.warn('Reset call failed:', err);
+      logger.warn('Reset call failed', err);
     }
     loadData();
   };

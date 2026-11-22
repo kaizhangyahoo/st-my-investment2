@@ -1,9 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+import logging
 from backend.app.schemas.auth import LoginRequest, SignUpRequest, AuthResponse, UserProfile, LoginEventLog
 from backend.app.services.auth_service import sign_in_with_email_password, sign_up_with_email_password, log_login_event
 from backend.app.core.security import create_access_token, get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Failures are already on the access line with Firebase's reason (e.g. INVALID_PASSWORD).
+# Neither path logs the email: the user id is enough to correlate.
+logger = logging.getLogger(__name__)
 
 @router.post("/login", response_model=AuthResponse)
 def login(payload: LoginRequest):
@@ -12,6 +17,7 @@ def login(payload: LoginRequest):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.get("error_message"))
     token = create_access_token({"sub": result.get("email"), "user_id": result.get("user_id")})
     result["access_token"] = token
+    logger.info("Login succeeded for user %s", result.get("user_id"), extra={"event": "auth.login.succeeded"})
     return result
 
 @router.post("/signup", response_model=AuthResponse)
@@ -21,6 +27,7 @@ def signup(payload: SignUpRequest):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.get("error_message"))
     token = create_access_token({"sub": result.get("email"), "user_id": result.get("user_id")})
     result["access_token"] = token
+    logger.info("Signup succeeded for user %s", result.get("user_id"), extra={"event": "auth.signup.succeeded"})
     return result
 
 @router.get("/me", response_model=UserProfile)

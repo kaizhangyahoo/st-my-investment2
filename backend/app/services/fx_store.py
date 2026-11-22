@@ -14,6 +14,7 @@ Kept separate from `user_portfolio_values.json` rather than added to it. That fi
 by the legacy app, and `history_service.stored_accounts()` reads every top-level key as an account,
 so a metadata section there would be listed as one.
 """
+import logging
 import json
 import os
 import tempfile
@@ -21,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
 
 from backend.app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 PAIRS: Tuple[str, ...] = ("GBPUSD=X", "GBPEUR=X")
 
@@ -75,7 +78,12 @@ def read_rates() -> Rates:
         with open(path, "r") as f:
             return _clean(json.load(f))
     except (OSError, ValueError) as e:
-        print(f"Could not read {path}: {e}. Treating the FX store as empty.")
+        logger.warning(
+            "Could not read %s: %s. Treating the FX store as empty, which removes the "
+            "last-real-close fallback if the provider is also unreachable.",
+            path,
+            e,
+        )
         return {}
 
 
@@ -107,7 +115,12 @@ def merge_rates(fetched: Rates) -> None:
             json.dump({pair: dict(sorted(s.items())) for pair, s in sorted(data.items())}, f, indent=2)
         os.replace(tmp, path)
     except OSError as e:
-        print(f"Could not persist the FX store to {path}: {e}")
+        logger.error(
+            "Could not persist the FX store to %s: %s. Settled closes fetched this run are "
+            "lost and will be re-fetched on every restart.",
+            path,
+            e,
+        )
         if os.path.exists(tmp):
             os.unlink(tmp)
 

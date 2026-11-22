@@ -11,6 +11,7 @@ and then 402s every symbol, and TwelveData's free tier forces a 60s wait between
 API keys come from backend/.env via `settings`. All HTTP calls have timeouts
 and failures are isolated per ticker/provider.
 """
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -20,6 +21,8 @@ import pandas as pd
 import requests
 
 from backend.app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 TIMEOUT = 15
 _TWELVEDATA_BATCH = 8
@@ -58,7 +61,11 @@ def fetch_us_prices(tickers: Iterable[str]) -> Tuple[Dict[str, Optional[float]],
     if not symbols:
         return prices, failures
     if not keys:
-        print("TWELVEDATA_API_KEY not set; skipping TwelveData")
+        logger.warning(
+            "TWELVEDATA_API_KEY not set; skipping TwelveData, so %d ticker(s) lose a fallback "
+            "provider and may end up unpriced",
+            len(symbols),
+        )
         return prices, [_failure(t, "twelvedata", "TWELVEDATA_API_KEY not set") for t in symbols]
 
     for batch_no, i in enumerate(range(0, len(symbols), _TWELVEDATA_BATCH)):
@@ -70,7 +77,7 @@ def fetch_us_prices(tickers: Iterable[str]) -> Tuple[Dict[str, Optional[float]],
                 timeout=TIMEOUT,
             ).json()
         except (requests.RequestException, ValueError) as e:
-            print(f"TwelveData request failed for {batch}: {e}")
+            logger.debug("TwelveData request failed for %s: %s", batch, e)
             failures.extend(_failure(t, "twelvedata", f"request failed: {e}") for t in batch)
             continue
         for t in batch:
@@ -105,10 +112,12 @@ def fetch_eodhd_price(ticker: str) -> Optional[float]:
         timeout=TIMEOUT,
     )
     if r.status_code == 402:
-        print(f"EODHD daily quota exhausted (free tier, 20/day); {ticker} needs another provider")
+        logger.warning(
+            "EODHD daily quota exhausted (free tier, 20/day); %s needs another provider", ticker
+        )
         raise ValueError("daily API request limit exceeded (free tier allows 20/day)")
     if r.status_code != 200:
-        print(f"EODHD status {r.status_code} for {symbol}")
+        logger.warning("EODHD returned status %s for %s", r.status_code, symbol)
         raise ValueError(f"HTTP {r.status_code}")
     data = r.json()
     if not isinstance(data, dict):
@@ -176,7 +185,9 @@ def _yahoo_price_or_failure(ticker: str) -> Tuple[Optional[float], Optional[Dict
     try:
         price = fetch_yahoo_price(ticker)
     except _FETCH_ERRORS as e:
-        print(f"fetch_yahoo_price failed for {ticker}: {e}")
+        # DEBUG, not WARNING: this fires per ticker on the hot path and a fallback provider is
+        # tried next. The aggregate consequence is logged once by portfolio_engine.
+        logger.debug("fetch_yahoo_price failed for %s: %s", ticker, e)
         return None, _failure(ticker, "yahoo", str(e))
     if price is None:
         return None, _failure(ticker, "yahoo", "no regularMarketPrice in response")
