@@ -22,6 +22,7 @@ import pandas as pd
 import requests
 
 from backend.app.core.config import settings
+from backend.app.core.tracing import span
 
 logger = logging.getLogger(__name__)
 
@@ -207,37 +208,54 @@ def get_prices(tickers: List[str]) -> Tuple[Dict[str, Optional[float]], List[Dic
     if not tickers:
         return prices, failures
 
-    # A copy of the caller's context per task. Neither the active trace nor the request id
-    # crosses a thread boundary on its own, so a plain pool.map leaves these fetches as orphan
-    # root traces and their log lines uncorrelated. One copy each: a Context cannot be entered
-    # twice concurrently.
-    with ThreadPoolExecutor(max_workers=_MAX_PARALLEL_FETCHES) as pool:
-        pending = [
-            pool.submit(contextvars.copy_context().run, _yahoo_price_or_failure, ticker)
-            for ticker in tickers
-        ]
-        for ticker, future in zip(tickers, pending):
-            price, failure = future.result()
-            prices[ticker] = price
-            if failure:
-                failures.append(failure)
+    # One span per tier, with the same two attributes each, so a trace answers "why did the
+    # paid providers run, and what did they rescue" -- which the client spans alone cannot say.
+    with span("price.yahoo", **{"price.requested": len(tickers)}) as tier:
+        # A copy of the caller's context per task. Neither the active trace nor the request id
+        # crosses a thread boundary on its own, so a plain pool.map leaves these fetches as
+        # orphan root traces and their log lines uncorrelated. One copy each: a Context cannot
+        # be entered twice concurrently.
+        with ThreadPoolExecutor(max_workers=_MAX_PARALLEL_FETCHES) as pool:
+            pending = [
+                pool.submit(contextvars.copy_context().run, _yahoo_price_or_failure, ticker)
+                for ticker in tickers
+            ]
+            for ticker, future in zip(tickers, pending):
+                price, failure = future.result()
+                prices[ticker] = price
+                if failure:
+                    failures.append(failure)
+        tier.set_attribute("price.priced", sum(1 for p in prices.values() if p is not None))
 
     missing = [t for t in tickers if prices.get(t) is None]
-    us_prices, us_failures = fetch_us_prices(t for t in missing if "." not in t)
-    failures.extend(us_failures)
-    for t, price in us_prices.items():
-        if price is not None:
-            prices[t] = price
 
-    for t in (t for t in missing if "." in t):
-        try:
-            price = fetch_eodhd_price(t)
-        except _FETCH_ERRORS as e:
-            failures.append(_failure(t, "eodhd", str(e)))
-            continue
-        if price is None:
-            failures.append(_failure(t, "eodhd", "no close or previousClose in response"))
-        else:
-            prices[t] = price
+    us_tickers = [t for t in missing if "." not in t]
+    if us_tickers:
+        with span("price.twelvedata", **{"price.requested": len(us_tickers)}) as tier:
+            us_prices, us_failures = fetch_us_prices(us_tickers)
+            failures.extend(us_failures)
+            rescued = 0
+            for t, price in us_prices.items():
+                if price is not None:
+                    prices[t] = price
+                    rescued += 1
+            tier.set_attribute("price.priced", rescued)
+
+    eu_tickers = [t for t in missing if "." in t]
+    if eu_tickers:
+        with span("price.eodhd", **{"price.requested": len(eu_tickers)}) as tier:
+            rescued = 0
+            for t in eu_tickers:
+                try:
+                    price = fetch_eodhd_price(t)
+                except _FETCH_ERRORS as e:
+                    failures.append(_failure(t, "eodhd", str(e)))
+                    continue
+                if price is None:
+                    failures.append(_failure(t, "eodhd", "no close or previousClose in response"))
+                else:
+                    prices[t] = price
+                    rescued += 1
+            tier.set_attribute("price.priced", rescued)
 
     return prices, failures

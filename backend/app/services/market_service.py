@@ -4,6 +4,7 @@ import requests
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from backend.app.core.cache import MISS, cache, ttl_cache
+from backend.app.core.tracing import annotate
 from backend.app.services import fx_store
 from backend.app.services.price_service import get_prices, fetch_yahoo_history
 
@@ -51,6 +52,16 @@ def get_current_prices(
             uncached.append(ticker)
         else:
             cached[ticker] = price
+
+    # On the request span, not a span of their own: a hit is the absence of work, and one span
+    # per lookup would dwarf the trace. `cache.hit` means every ticker came from the cache, so
+    # a response that touched no provider is distinguishable from one that did.
+    annotate(**{
+        "cache.name": "current_price",
+        "cache.hit": not uncached,
+        "cache.hits": len(cached),
+        "cache.misses": len(uncached),
+    })
 
     if not uncached:
         return dict(cached), []
