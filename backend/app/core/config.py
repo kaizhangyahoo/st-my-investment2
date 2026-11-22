@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     # (fastapi-portfolio, web-portfolio). Read from backend/.env like everything else here.
     OTEL_SERVICE_NAME: str = "fastapi-portfolio"
     OTEL_EXPORTER_OTLP_ENDPOINT: Optional[str] = None
+    OTEL_EXPORTER_OTLP_PROTOCOL: str = "http/protobuf" # "grpc" or "http/protobuf"
     OTEL_EXPORTER_OTLP_HEADERS: Optional[str] = None  # e.g. Authorization=Basic <base64>
     OTEL_RESOURCE_ATTRIBUTES: Optional[str] = None
 

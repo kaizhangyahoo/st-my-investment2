@@ -9,7 +9,12 @@ except ImportError:  # pragma: no cover
     TestClient = None
 
 from backend.app.core import redaction
-from backend.app.core.otel_logs import RedactingOTelHandler, parse_kv
+from backend.app.core.otel_logs import (
+    RedactingOTelHandler,
+    _build_exporter,
+    parse_kv,
+    resolve_protocol,
+)
 
 
 def _app():
@@ -121,6 +126,36 @@ class TestParseKv(unittest.TestCase):
             OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic MTIzNDU2Nzg6Z2xjX3NlY3JldA=="
 
         self.assertIn("MTIzNDU2Nzg6Z2xjX3NlY3JldA==", redaction.collect_secret_literals(S()))
+
+
+class TestProtocolSelection(unittest.TestCase):
+    """Exporter construction opens no connection, so these stay offline."""
+
+    ENDPOINT = "https://gw.invalid/otlp"
+    LOGGER = "backend.app.core.otel_logs"
+
+    def test_an_unset_protocol_defaults_to_http_without_complaint(self):
+        with self.assertNoLogs(self.LOGGER, "WARNING"):
+            self.assertEqual(resolve_protocol(None), "http/protobuf")
+            self.assertEqual(resolve_protocol(""), "http/protobuf")
+
+    def test_the_value_is_trimmed_and_case_insensitive(self):
+        with self.assertNoLogs(self.LOGGER, "WARNING"):
+            self.assertEqual(resolve_protocol("  HTTP/PROTOBUF "), "http/protobuf")
+
+    def test_any_other_transport_is_refused_with_a_warning(self):
+        # grpc is the value most likely to be tried: nothing in this project receives OTLP over
+        # it, so it must be refused rather than quietly selecting a different exporter.
+        for value in ("grpc", "http/json"):
+            with self.subTest(value=value):
+                with self.assertLogs(self.LOGGER, "WARNING") as captured:
+                    self.assertEqual(resolve_protocol(value), "http/protobuf")
+                self.assertIn(value, captured.output[0])
+
+    def test_the_exporter_posts_to_the_logs_signal_path(self):
+        exporter = _build_exporter(self.ENDPOINT, {"x-extra": "1"})
+        self.assertIn(".proto.http.", type(exporter).__module__)
+        self.assertEqual(exporter._endpoint, f"{self.ENDPOINT}/v1/logs")
 
 
 if __name__ == "__main__":
