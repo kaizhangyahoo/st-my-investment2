@@ -111,4 +111,15 @@ def instrument_app(app, settings, exporter=None) -> Optional[object]:
     if requests_instrumentor.is_instrumented_by_opentelemetry:
         requests_instrumentor.uninstrument()
     requests_instrumentor.instrument(tracer_provider=provider, request_hook=redact_span_url)
+
+    # Logs and traces share one switch, so configure_logging's "log export enabled" line would
+    # otherwise be the only evidence either is live -- and it still prints when the trace
+    # packages are missing. Announced after instrumentation, so it means traced, not merely built.
+    endpoint = (settings.OTEL_EXPORTER_OTLP_ENDPOINT or "").strip().rstrip("/")
+    if endpoint:
+        logging.getLogger("app.startup").info(
+            "Grafana Cloud OTLP trace export enabled -> %s/v1/traces (service: %s)",
+            endpoint,
+            settings.OTEL_SERVICE_NAME,
+        )
     return provider

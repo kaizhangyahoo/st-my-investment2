@@ -154,5 +154,33 @@ class TestUnhandledErrorSpans(unittest.TestCase):
         self.assertNotIn("SUPERSECRET_EODHD", event.attributes["exception.stacktrace"])
 
 
+@unittest.skipIf(TestClient is None, "fastapi / opentelemetry sdk unavailable")
+class TestStartupAnnouncement(unittest.TestCase):
+    """Logs and traces key off the same variable, so the log export line alone cannot tell an
+    operator that traces are live -- it still prints when the trace packages are absent."""
+
+    ENDPOINT = "https://gw.grafana.net.invalid/otlp"
+
+    def tearDown(self):
+        from opentelemetry.instrumentation.requests import RequestsInstrumentor
+        RequestsInstrumentor().uninstrument()
+        if otel_traces._provider is not None:
+            otel_traces._provider.shutdown()
+            otel_traces._provider = None
+
+    def test_the_startup_line_names_the_endpoint_traces_go_to(self):
+        with self.assertLogs("app.startup", "INFO") as logs:
+            otel_traces.instrument_app(
+                FastAPI(), _settings(self.ENDPOINT), exporter=InMemorySpanExporter()
+            )
+        announced = "\n".join(logs.output)
+        self.assertIn(f"{self.ENDPOINT}/v1/traces", announced)
+        self.assertIn("test-svc", announced)
+
+    def test_nothing_is_announced_when_tracing_is_off(self):
+        with self.assertNoLogs("app.startup", "INFO"):
+            self.assertIsNone(otel_traces.instrument_app(FastAPI(), _settings()))
+
+
 if __name__ == "__main__":
     unittest.main()
