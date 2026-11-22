@@ -74,6 +74,7 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     logger.setView(activeTab);
+    logger.info(`Tab changed: ${activeTab}`);
   }, [activeTab]);
 
   // Unmapped names send the user straight to Reference Data, where SEC suggestions load
@@ -126,9 +127,8 @@ export const Dashboard: React.FC = () => {
 
       {/* Main Workspace View Content */}
       <main
-        className={`flex-1 pt-20 px-4 sm:px-6 lg:px-8 transition-all duration-300 ${
-          isSidebarCollapsed ? 'ml-16' : 'ml-60'
-        }`}
+        className={`flex-1 pt-20 px-4 sm:px-6 lg:px-8 transition-all duration-300 ${isSidebarCollapsed ? 'ml-16' : 'ml-60'
+          }`}
       >
         <div className="max-w-[1600px] mx-auto py-2">
           {activeTab === 'ig-csv-analysis' && (

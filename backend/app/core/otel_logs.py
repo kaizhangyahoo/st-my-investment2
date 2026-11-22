@@ -97,19 +97,39 @@ def build_otel_handler(settings) -> Optional[logging.Handler]:
     """A handler exporting to the configured endpoint, or None when export is not configured."""
     global _provider
     endpoint = (settings.OTEL_EXPORTER_OTLP_ENDPOINT or "").strip().rstrip("/")
+    headers_raw = (settings.OTEL_EXPORTER_OTLP_HEADERS or "").strip()
+
     if not endpoint:
+        if headers_raw:
+            logging.getLogger(__name__).warning(
+                "OTEL_EXPORTER_OTLP_HEADERS is configured in .env, but OTEL_EXPORTER_OTLP_ENDPOINT is "
+                "missing. Grafana log export is disabled; logs stay on stdout only."
+            )
         return None
+
     protocol = resolve_protocol(settings.OTEL_EXPORTER_OTLP_PROTOCOL)
+    headers = parse_kv(headers_raw)
+
+    if "grafana.net" in endpoint and not headers.get("Authorization"):
+        logging.getLogger(__name__).warning(
+            "OTEL_EXPORTER_OTLP_ENDPOINT points to Grafana Cloud (%s), but "
+            "OTEL_EXPORTER_OTLP_HEADERS does not contain an Authorization header. "
+            "Grafana Cloud will reject exported logs with 401/403.",
+            endpoint,
+        )
+
     try:
         from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.resources import Resource
-        exporter = _build_exporter(endpoint, parse_kv(settings.OTEL_EXPORTER_OTLP_HEADERS))
-    except ImportError:
-        logging.getLogger(__name__).warning(
-            "OTEL_EXPORTER_OTLP_ENDPOINT is set but the OpenTelemetry packages for %s are not "
-            "installed; logs stay on stdout only. pip install -r backend/requirements.txt",
-            protocol,
+        exporter = _build_exporter(endpoint, headers)
+    except ImportError as e:
+        missing = getattr(e, "name", "opentelemetry")
+        logging.getLogger(__name__).error(
+            "OTEL_EXPORTER_OTLP_ENDPOINT is configured (%s), but required OpenTelemetry package "
+            "%r is not installed; logs stay on stdout only. Run: pip install -r backend/requirements.txt",
+            endpoint,
+            missing,
         )
         return None
 

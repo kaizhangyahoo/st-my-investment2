@@ -12,6 +12,7 @@ from backend.app.core import redaction
 from backend.app.core.otel_logs import (
     RedactingOTelHandler,
     _build_exporter,
+    build_otel_handler,
     parse_kv,
     resolve_protocol,
 )
@@ -156,6 +157,61 @@ class TestProtocolSelection(unittest.TestCase):
         exporter = _build_exporter(self.ENDPOINT, {"x-extra": "1"})
         self.assertIn(".proto.http.", type(exporter).__module__)
         self.assertEqual(exporter._endpoint, f"{self.ENDPOINT}/v1/logs")
+
+
+class TestBuildOTelHandler(unittest.TestCase):
+    LOGGER = "backend.app.core.otel_logs"
+
+    class SettingsStub:
+        OTEL_EXPORTER_OTLP_ENDPOINT = None
+        OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf"
+        OTEL_EXPORTER_OTLP_HEADERS = None
+        OTEL_RESOURCE_ATTRIBUTES = None
+        OTEL_SERVICE_NAME = "test-service"
+        ENVIRONMENT = "test"
+
+    def test_offline_mode_returns_none_without_warning(self):
+        s = self.SettingsStub()
+        with self.assertNoLogs(self.LOGGER, "WARNING"):
+            handler = build_otel_handler(s)
+        self.assertIsNone(handler)
+
+    def test_headers_without_endpoint_warns_developer(self):
+        s = self.SettingsStub()
+        s.OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic abc"
+        with self.assertLogs(self.LOGGER, "WARNING") as captured:
+            handler = build_otel_handler(s)
+        self.assertIsNone(handler)
+        self.assertIn("OTEL_EXPORTER_OTLP_ENDPOINT is missing", captured.output[0])
+
+    def test_grafana_endpoint_without_auth_header_warns_developer(self):
+        s = self.SettingsStub()
+        s.OTEL_EXPORTER_OTLP_ENDPOINT = "https://otlp-gateway-prod-gb-south-1.grafana.net/otlp"
+        s.OTEL_EXPORTER_OTLP_HEADERS = ""
+        with self.assertLogs(self.LOGGER, "WARNING") as captured:
+            handler = build_otel_handler(s)
+        self.assertIn("does not contain an Authorization header", captured.output[0])
+
+    def test_missing_package_logs_actionable_error(self):
+        s = self.SettingsStub()
+        s.OTEL_EXPORTER_OTLP_ENDPOINT = "https://gw.invalid/otlp"
+        s.OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic abc"
+        import builtins
+        orig_import = builtins.__import__
+
+        def failing_import(name, *args, **kwargs):
+            if "opentelemetry" in name:
+                raise ImportError(f"No module named {name}", name=name)
+            return orig_import(name, *args, **kwargs)
+
+        builtins.__import__ = failing_import
+        try:
+            with self.assertLogs(self.LOGGER, "ERROR") as captured:
+                handler = build_otel_handler(s)
+            self.assertIsNone(handler)
+            self.assertIn("pip install -r backend/requirements.txt", captured.output[0])
+        finally:
+            builtins.__import__ = orig_import
 
 
 if __name__ == "__main__":

@@ -49,9 +49,9 @@ class Settings(BaseSettings):
 
     # OpenTelemetry log export. Unset endpoint = stdout only. Service names are component-first
     # (fastapi-portfolio, web-portfolio). Read from backend/.env like everything else here.
-    OTEL_SERVICE_NAME: str = "fastapi-portfolio"
+    OTEL_SERVICE_NAME: str = "fastapi-portfolio" # override by .env
     OTEL_EXPORTER_OTLP_ENDPOINT: Optional[str] = None
-    OTEL_EXPORTER_OTLP_PROTOCOL: str = "http/protobuf" # "grpc" or "http/protobuf"
+    OTEL_EXPORTER_OTLP_PROTOCOL: str = "http/protobuf" 
     OTEL_EXPORTER_OTLP_HEADERS: Optional[str] = None  # e.g. Authorization=Basic <base64>
     OTEL_RESOURCE_ATTRIBUTES: Optional[str] = None
 
