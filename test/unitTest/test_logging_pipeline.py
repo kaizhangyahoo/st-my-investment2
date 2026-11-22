@@ -8,7 +8,11 @@ try:
 except ImportError:  # pragma: no cover
     TestClient = None
 
+<<<<<<< HEAD
 from backend.app.core import otel_logs, redaction
+=======
+from backend.app.core import redaction
+>>>>>>> refs/remotes/origin/KAN-3-de-streamlit
 from backend.app.core.otel_logs import (
     RedactingOTelHandler,
     _build_exporter,
@@ -170,6 +174,7 @@ class TestBuildOTelHandler(unittest.TestCase):
         OTEL_SERVICE_NAME = "test-service"
         ENVIRONMENT = "test"
 
+<<<<<<< HEAD
     def _close_provider_afterwards(self):
         """A successful build leaves a live batch worker and an atexit hook in a module global."""
         def close():
@@ -178,6 +183,8 @@ class TestBuildOTelHandler(unittest.TestCase):
                 otel_logs._provider = None
         self.addCleanup(close)
 
+=======
+>>>>>>> refs/remotes/origin/KAN-3-de-streamlit
     def test_offline_mode_returns_none_without_warning(self):
         s = self.SettingsStub()
         with self.assertNoLogs(self.LOGGER, "WARNING"):
@@ -194,6 +201,7 @@ class TestBuildOTelHandler(unittest.TestCase):
 
     def test_grafana_endpoint_without_auth_header_warns_developer(self):
         s = self.SettingsStub()
+<<<<<<< HEAD
         # Unroutable, so the built exporter cannot reach the real gateway, while still matching
         # the "grafana.net" substring the warning is keyed on.
         s.OTEL_EXPORTER_OTLP_ENDPOINT = "https://gw.grafana.net.invalid/otlp"
@@ -214,6 +222,14 @@ class TestBuildOTelHandler(unittest.TestCase):
             handler = build_otel_handler(s)
         self.assertEqual(handler._pa_protocol, "http/protobuf")
 
+=======
+        s.OTEL_EXPORTER_OTLP_ENDPOINT = "https://otlp-gateway-prod-gb-south-1.grafana.net/otlp"
+        s.OTEL_EXPORTER_OTLP_HEADERS = ""
+        with self.assertLogs(self.LOGGER, "WARNING") as captured:
+            handler = build_otel_handler(s)
+        self.assertIn("does not contain an Authorization header", captured.output[0])
+
+>>>>>>> refs/remotes/origin/KAN-3-de-streamlit
     def test_missing_package_logs_actionable_error(self):
         s = self.SettingsStub()
         s.OTEL_EXPORTER_OTLP_ENDPOINT = "https://gw.invalid/otlp"
