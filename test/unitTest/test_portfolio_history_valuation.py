@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from backend.app.core import request_context
 from backend.app.core.config import settings
 from backend.app.services import history_service
 from test.support.portfolio import temp_fx_store
@@ -294,6 +295,115 @@ class TestSharedCacheFile(HistoryCase):
             res = self.run_history(self.TRADES)
         self.assertTrue(res["data_quality"]["fx_fallback"])
         self.assertTrue(res["data_quality"]["degraded"])
+
+
+class TestTheRequestsCopyOfTheValuesFile(HistoryCase):
+    """KAN-69: the file is parsed once per request, without weakening the merge.
+
+    The scope is bound by hand. `bind_request` is what the ASGI middleware already calls for
+    every request, so these drive the same mechanism a route does without needing an app; the
+    resulting span counts are pinned separately in `test_compute_path_spans.py`.
+    """
+
+    PRICES = {"AAPL": (_history([100.0, 110.0, 120.0]), "USD")}
+    SEED_CACHE = {"QX2B3": {"2019-04-30": 1234.5}}
+
+    def in_request(self):
+        tokens = request_context.bind_request("req-kan69")
+        self.addCleanup(request_context.reset_request, tokens)
+
+    def count_reads(self):
+        """Counts reads that actually open the file -- the same thing the spans count."""
+        reads = []
+        real = history_service._read_values_from_disk
+
+        def counting():
+            reads.append(1)
+            return real()
+
+        patcher = patch.object(history_service, "_read_values_from_disk", counting)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return reads
+
+    def test_repeated_reads_in_one_request_parse_the_file_once(self):
+        self.in_request()
+        reads = self.count_reads()
+
+        accounts = history_service.stored_accounts()
+        history_service.read_cached_series("QX2B3")
+        history_service.default_account()
+
+        self.assertEqual(len(reads), 1)
+        self.assertEqual(accounts, ["QX2B3"])
+
+    def test_outside_a_request_every_read_still_goes_to_disk(self):
+        """No scope means no shared copy, so a script or a background task keeps the old
+        behaviour rather than inheriting a process-wide snapshot nothing would invalidate."""
+        reads = self.count_reads()
+
+        history_service.stored_accounts()
+        history_service.stored_accounts()
+
+        self.assertEqual(len(reads), 2)
+
+    def test_a_write_landing_mid_request_survives_the_merge(self):
+        """The hazard the request copy must not introduce, and the reason the merge still reads.
+
+        The copy is taken before the price fetches, which take minutes against a real provider,
+        and the legacy Streamlit app writes this same path in that window. Merging into the
+        stale copy would write its keys out of existence -- the lost update the atomic
+        read-merge-write exists to prevent.
+        """
+        self.in_request()
+        history_service.stored_accounts()  # the request takes its copy
+
+        with open(self.values_path, "w") as f:  # the other app commits while we work
+            json.dump({"QX2B3": {"2019-04-30": 1234.5}, "QRPOL": {"2024-02-01": 77.0}}, f)
+
+        history_service._merge_and_write("ig:u1", {"2024-01-02": 500.0})
+
+        stored = self.stored()
+        self.assertEqual(stored["QRPOL"], {"2024-02-01": 77.0})
+        self.assertEqual(stored["QX2B3"], {"2019-04-30": 1234.5})
+        self.assertEqual(stored["ig:u1"], {"2024-01-02": 500.0})
+
+    def test_the_copy_is_refreshed_from_what_the_merge_wrote(self):
+        """Why a computing request reads twice and not three times: the response's points come
+        from the merged copy rather than from a third read."""
+        self.in_request()
+        history_service.stored_accounts()
+        reads = self.count_reads()
+
+        history_service._merge_and_write("ig:u1", {"2024-01-02": 500.0})
+        points = history_service.read_cached_series("ig:u1")
+
+        self.assertEqual(len(reads), 1, "only the merge's own deliberate read")
+        self.assertEqual(points, [{"date": "2024-01-02", "value": 500.0}])
+
+    def test_a_failed_write_leaves_the_copy_trusting_the_file(self):
+        """A merge that never reached disk must not read back afterwards as though it had."""
+        self.in_request()
+        history_service.stored_accounts()
+
+        with patch("os.replace", side_effect=OSError("disk full")):
+            with self.assertLogs(history_service.logger, "ERROR"):
+                history_service._merge_and_write("ig:u1", {"2024-01-02": 500.0})
+
+        self.assertEqual(history_service.read_cached_series("ig:u1"), [])
+        self.assertNotIn("ig:u1", self.stored())
+
+    def test_the_copy_does_not_outlive_its_own_request(self):
+        self.in_request()
+        self.assertEqual(history_service.stored_accounts(), ["QX2B3"])
+
+        tokens = request_context.bind_request("req-two")
+        try:
+            with open(self.values_path, "w") as f:
+                json.dump({"QRPOL": {"2024-02-01": 77.0}}, f)
+            self.assertEqual(history_service.stored_accounts(), ["QRPOL"])
+        finally:
+            request_context.reset_request(tokens)
 
 
 class TestDefaultAccount(HistoryCase):

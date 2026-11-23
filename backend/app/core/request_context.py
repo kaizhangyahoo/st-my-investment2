@@ -7,17 +7,23 @@ changing a single service signature.
 import logging
 import uuid
 from contextvars import ContextVar
-from typing import NamedTuple, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 _request_id: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
 _trace: ContextVar[Optional[str]] = ContextVar("trace", default=None)
 _span: ContextVar[Optional[str]] = ContextVar("span", default=None)
+# Scratch space for anything a request would otherwise re-derive, keyed by the deriving module.
+# Deliberately one mutable dict rather than a ContextVar per value: a sync endpoint runs in a
+# threadpool with a *copy* of this context, so a var set inside the endpoint is invisible to the
+# rest of the request, while writes into this dict are shared.
+_request_cache: ContextVar[Optional[Dict[str, Any]]] = ContextVar("request_cache", default=None)
 
 
 class _Tokens(NamedTuple):
     request_id: object
     trace: object
     span: object
+    cache: object
 
 
 def new_request_id() -> str:
@@ -32,14 +38,30 @@ def get_trace() -> Tuple[Optional[str], Optional[str]]:
     return _trace.get(), _span.get()
 
 
+def request_cache() -> Optional[Dict[str, Any]]:
+    """This request's scratch dict, or None when no request is bound.
+
+    None is not the same as an empty dict: it means "not inside a request", so a caller outside
+    one -- a test, a script, a background task -- keeps its uncached behaviour rather than
+    sharing a single process-wide store with every other caller.
+    """
+    return _request_cache.get()
+
+
 def bind_request(request_id: str, trace: Optional[str] = None, span: Optional[str] = None) -> _Tokens:
-    return _Tokens(_request_id.set(request_id), _trace.set(trace), _span.set(span))
+    return _Tokens(
+        _request_id.set(request_id),
+        _trace.set(trace),
+        _span.set(span),
+        _request_cache.set({}),
+    )
 
 
 def reset_request(tokens: _Tokens) -> None:
     _request_id.reset(tokens.request_id)
     _trace.reset(tokens.trace)
     _span.reset(tokens.span)
+    _request_cache.reset(tokens.cache)
 
 
 def parse_cloud_trace(header: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
