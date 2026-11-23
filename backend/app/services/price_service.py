@@ -208,9 +208,16 @@ def get_prices(tickers: List[str]) -> Tuple[Dict[str, Optional[float]], List[Dic
     if not tickers:
         return prices, failures
 
-    # One span per tier, with the same two attributes each, so a trace answers "why did the
+    # One span per tier, with the same three attributes each, so a trace answers "why did the
     # paid providers run, and what did they rescue" -- which the client spans alone cannot say.
+    #
+    # `price.failures` counts what this tier added to the list, never why: `_failure(..., str(e))`
+    # on a `requests` error embeds the whole URL, `apikey=` included, and the reason is already
+    # one level down on the client span. It is also not `requested - priced`: a symbol missing
+    # from a TwelveData batch response yields a null with no failure recorded, so the gap between
+    # the two is itself the signal.
     with span("price.yahoo", **{"price.requested": len(tickers)}) as tier:
+        failed_before = len(failures)
         # A copy of the caller's context per task. Neither the active trace nor the request id
         # crosses a thread boundary on its own, so a plain pool.map leaves these fetches as
         # orphan root traces and their log lines uncorrelated. One copy each: a Context cannot
@@ -226,6 +233,7 @@ def get_prices(tickers: List[str]) -> Tuple[Dict[str, Optional[float]], List[Dic
                 if failure:
                     failures.append(failure)
         tier.set_attribute("price.priced", sum(1 for p in prices.values() if p is not None))
+        tier.set_attribute("price.failures", len(failures) - failed_before)
 
     missing = [t for t in tickers if prices.get(t) is None]
 
@@ -240,10 +248,12 @@ def get_prices(tickers: List[str]) -> Tuple[Dict[str, Optional[float]], List[Dic
                     prices[t] = price
                     rescued += 1
             tier.set_attribute("price.priced", rescued)
+            tier.set_attribute("price.failures", len(us_failures))
 
     eu_tickers = [t for t in missing if "." in t]
     if eu_tickers:
         with span("price.eodhd", **{"price.requested": len(eu_tickers)}) as tier:
+            failed_before = len(failures)
             rescued = 0
             for t in eu_tickers:
                 try:
@@ -257,5 +267,6 @@ def get_prices(tickers: List[str]) -> Tuple[Dict[str, Optional[float]], List[Dic
                     prices[t] = price
                     rescued += 1
             tier.set_attribute("price.priced", rescued)
+            tier.set_attribute("price.failures", len(failures) - failed_before)
 
     return prices, failures

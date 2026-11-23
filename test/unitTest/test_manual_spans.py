@@ -14,7 +14,7 @@ from backend.app.core import otel_traces
 from backend.app.core.request_context import RequestContextFilter
 from backend.app.core.tracing import annotate, span
 from backend.app.services import market_service, price_service
-from test.support.tracing import TRACING_AVAILABLE
+from test.support.tracing import TRACING_AVAILABLE, assert_status_not_error
 from test.support.tracing import StubTransport as _StubTransport
 from test.support.tracing import TracedApp as _TracedApp
 from test.support.tracing import patch_transport as _patch_transport
@@ -79,6 +79,34 @@ class TestProviderFanOutSpans(_TracedApp):
         self.assertEqual(twelvedata.attributes["price.priced"], 3)
         # No dotted tickers, so the EODHD tier never ran and must not appear in the trace.
         self.assertNotIn("price.eodhd", {s.name for s in self.spans()})
+
+    def test_a_tier_that_priced_nothing_reports_how_many_attempts_failed(self):
+        """Every failure in `get_prices` is swallowed into a list rather than raised, so without
+        this count a tier that priced nothing is an OK span whose only signal is `priced=0`."""
+        stub = _StubTransport(yahoo_status=500)
+        with mock.patch.object(price_service, "_twelvedata_keys", lambda: []), \
+                _patch_transport(stub):
+            self.assertEqual(self.client.get(self.path).status_code, 200)
+
+        tiers = [self.named("price.yahoo"), self.named("price.twelvedata")]
+        for tier in tiers:
+            self.assertEqual(tier.attributes["price.requested"], len(TICKERS))
+            self.assertEqual(tier.attributes["price.priced"], 0)
+            # Per tier, not cumulative: TwelveData added 3 of the 6 failures on the response, and
+            # a bare `len(failures)` here would report all 6 against it.
+            self.assertEqual(tier.attributes["price.failures"], len(TICKERS))
+        # A swallowed provider failure is a degraded answer, not an outage. Marking the tier an
+        # error would make Grafana's error rate count unpriced tickers as downtime.
+        assert_status_not_error(self, tiers)
+
+        # The reason stays one level down, where it already is: `str(e)` on a requests error
+        # carries the whole URL, `apikey=` included, so it must never become an attribute here.
+        fetches = [s for s in self.spans() if s.kind is SpanKind.CLIENT]
+        self.assertEqual(len(fetches), len(TICKERS))
+        for fetch in fetches:
+            self.assertEqual(fetch.attributes["http.status_code"], 500)
+        for tier in tiers:
+            self.assertNotIn("price.failure_reason", tier.attributes)
 
 
 @unittest.skipIf(not TRACING_AVAILABLE, "fastapi / opentelemetry sdk unavailable")
