@@ -14,6 +14,7 @@ from backend.app.services.ticker_service import find_unresolved_symbols, load_ti
 from backend.app.schemas.portfolio import PortfolioSummary, CashflowItem, TradeActivityItem
 from backend.app.core.security import get_current_user
 from backend.app.core.diagnostics import log_data_quality
+from backend.app.core.tracing import record_cache_hit, record_cache_miss, span
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -45,43 +46,50 @@ def find_latest_download_files() -> Tuple[Optional[str], Optional[str]]:
     Search ~/Downloads for Tr*.csv files and select the ones with the latest date.
     Returns (latest_trade_file, latest_transaction_file).
     """
-    downloads_dir = os.path.expanduser('~/Downloads')
-    if not os.path.isdir(downloads_dir):
-        return None, None
+    # The directory and the filenames stay off the span: the path contains the OS username and
+    # the basename contains the broker account id.
+    with span("trades.scan_downloads") as active:
+        downloads_dir = os.path.expanduser('~/Downloads')
+        if not os.path.isdir(downloads_dir):
+            active.set_attribute("scan.candidates", 0)
+            return None, None
 
-    patterns = ['Trade*.csv', 'Transaction*.csv', 'Tr*.csv']
-    found_files = set()
-    for pattern in patterns:
-        found_files.update(glob.glob(os.path.join(downloads_dir, pattern)))
+        patterns = ['Trade*.csv', 'Transaction*.csv', 'Tr*.csv']
+        found_files = set()
+        for pattern in patterns:
+            found_files.update(glob.glob(os.path.join(downloads_dir, pattern)))
 
-    trade_candidates: List[Tuple[datetime, str]] = []
-    trans_candidates: List[Tuple[datetime, str]] = []
-    generic_candidates: List[Tuple[datetime, str]] = []
+        trade_candidates: List[Tuple[datetime, str]] = []
+        trans_candidates: List[Tuple[datetime, str]] = []
+        generic_candidates: List[Tuple[datetime, str]] = []
 
-    for f in found_files:
-        basename = os.path.basename(f)
-        dt = parse_file_date(f)
-        if basename.startswith('Trade'):
-            trade_candidates.append((dt, f))
-        elif basename.startswith('Transaction'):
-            trans_candidates.append((dt, f))
-        else:
-            generic_candidates.append((dt, f))
+        for f in found_files:
+            basename = os.path.basename(f)
+            dt = parse_file_date(f)
+            if basename.startswith('Trade'):
+                trade_candidates.append((dt, f))
+            elif basename.startswith('Transaction'):
+                trans_candidates.append((dt, f))
+            else:
+                generic_candidates.append((dt, f))
 
-    trade_candidates.sort(key=lambda x: x[0], reverse=True)
-    trans_candidates.sort(key=lambda x: x[0], reverse=True)
-    generic_candidates.sort(key=lambda x: x[0], reverse=True)
+        trade_candidates.sort(key=lambda x: x[0], reverse=True)
+        trans_candidates.sort(key=lambda x: x[0], reverse=True)
+        generic_candidates.sort(key=lambda x: x[0], reverse=True)
 
-    latest_trade = trade_candidates[0][1] if trade_candidates else None
-    latest_trans = trans_candidates[0][1] if trans_candidates else None
+        latest_trade = trade_candidates[0][1] if trade_candidates else None
+        latest_trans = trans_candidates[0][1] if trans_candidates else None
 
-    # Fallback to generic Tr*.csv if specific prefixes weren't found
-    if not latest_trade and generic_candidates:
-        latest_trade = generic_candidates[0][1]
-    if not latest_trans and len(generic_candidates) > 1:
-        latest_trans = generic_candidates[1][1]
+        # Fallback to generic Tr*.csv if specific prefixes weren't found
+        if not latest_trade and generic_candidates:
+            latest_trade = generic_candidates[0][1]
+        if not latest_trans and len(generic_candidates) > 1:
+            latest_trans = generic_candidates[1][1]
 
-    return latest_trade, latest_trans
+        active.set_attribute("scan.candidates", len(found_files))
+        active.set_attribute("scan.found_trade", latest_trade is not None)
+        active.set_attribute("scan.found_transaction", latest_trans is not None)
+        return latest_trade, latest_trans
 
 UNKNOWN_FILL = "—"
 _CURRENCY_SYMBOLS = {'USD': '$', 'GBP': '£', 'EUR': '€'}
@@ -124,6 +132,13 @@ def extract_trade_activities(df: pd.DataFrame, limit: Optional[int] = None) -> L
 
     Dates are emitted as ISO `YYYY-MM-DD` so the client can filter by quarter/year.
     """
+    # Outside the `try`, so the broad except that keeps the blotter from taking the whole
+    # response down keeps its exact shape.
+    with span("trades.activities", **{"activities.rows": len(df)}):
+        return _trade_activities(df, limit)
+
+
+def _trade_activities(df: pd.DataFrame, limit: Optional[int]) -> List[Dict[str, Any]]:
     try:
         df_copy = df.copy()
         if 'TextDate' in df_copy.columns:
@@ -167,37 +182,49 @@ def extract_trade_activities(df: pd.DataFrame, limit: Optional[int] = None) -> L
 
 def get_or_load_trade_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """Get active trade df from memory or autoload the latest Tr*.csv from ~/Downloads."""
-    df = _LAST_TRADE_DF.get(user_id)
-    filename = _LAST_TRADE_FILENAME.get(user_id)
-    if df is not None:
-        return df, filename
+    # The span covers the in-memory check as well as the load, because the difference between
+    # them is the question: a tenth of a millisecond on a hit against a glob plus a `read_csv`
+    # on a miss.
+    with span("trades.load_statement", **{"statement.kind": "trade"}) as active:
+        df = _LAST_TRADE_DF.get(user_id)
+        filename = _LAST_TRADE_FILENAME.get(user_id)
+        if df is not None:
+            record_cache_hit("trade_df")
+            return df, filename
 
-    # If the user performed a manual upload that lacked trade history,
-    # do NOT auto-load from ~/Downloads behind the scenes.
-    if _USER_MANUAL_UPLOAD.get(user_id) and user_id in _LAST_TRANSACTION_DF:
+        # If the user performed a manual upload that lacked trade history,
+        # do NOT auto-load from ~/Downloads behind the scenes.
+        if _USER_MANUAL_UPLOAD.get(user_id) and user_id in _LAST_TRANSACTION_DF:
+            return None, None
+
+        # Counted here rather than above the early return: this request is about to glob and
+        # parse, which is the cost a miss means. Declining to look is neither a hit nor a miss,
+        # and leaves the cache absent from the span entirely.
+        record_cache_miss("trade_df")
+        # Search ~/Downloads
+        latest_trade, latest_trans = find_latest_download_files()
+        if latest_trade and os.path.exists(latest_trade):
+            try:
+                loaded_df = pd.read_csv(latest_trade)
+                active.set_attribute("statement.rows", len(loaded_df))
+                active.set_attribute("statement.columns", len(loaded_df.columns))
+                _LAST_TRADE_DF[user_id] = loaded_df
+                _LAST_TRADE_FILENAME[user_id] = os.path.basename(latest_trade)
+                if latest_trans and os.path.exists(latest_trans) and user_id not in _LAST_TRANSACTION_DF:
+                    try:
+                        _LAST_TRANSACTION_DF[user_id] = pd.read_csv(latest_trans)
+                        _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
+                    except Exception as e:
+                        logger.warning(
+                            "Could not autoload transaction statement %s: %s",
+                            os.path.basename(latest_trans), e,
+                        )
+                logger.info("Autoloaded trade statement %s from ~/Downloads", os.path.basename(latest_trade))
+                return loaded_df, os.path.basename(latest_trade)
+            except Exception as e:
+                active.set_attribute("statement.parse_failed", True)
+                logger.warning("Could not autoload trade statement %s: %s", os.path.basename(latest_trade), e)
         return None, None
-
-    # Search ~/Downloads
-    latest_trade, latest_trans = find_latest_download_files()
-    if latest_trade and os.path.exists(latest_trade):
-        try:
-            loaded_df = pd.read_csv(latest_trade)
-            _LAST_TRADE_DF[user_id] = loaded_df
-            _LAST_TRADE_FILENAME[user_id] = os.path.basename(latest_trade)
-            if latest_trans and os.path.exists(latest_trans) and user_id not in _LAST_TRANSACTION_DF:
-                try:
-                    _LAST_TRANSACTION_DF[user_id] = pd.read_csv(latest_trans)
-                    _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
-                except Exception as e:
-                    logger.warning(
-                        "Could not autoload transaction statement %s: %s",
-                        os.path.basename(latest_trans), e,
-                    )
-            logger.info("Autoloaded trade statement %s from ~/Downloads", os.path.basename(latest_trade))
-            return loaded_df, os.path.basename(latest_trade)
-        except Exception as e:
-            logger.warning("Could not autoload trade statement %s: %s", os.path.basename(latest_trade), e)
-    return None, None
 
 @router.post("/upload")
 async def upload_files(files: List[UploadFile] = File(...), user: dict = Depends(get_current_user)):
@@ -291,27 +318,34 @@ def get_or_load_transaction_df(user_id: str) -> Tuple[Optional[pd.DataFrame], Op
     (`TransactionHistory-QX2B3-(...).csv`) and callers comparing it against a chosen account need
     to read it.
     """
-    df = _LAST_TRANSACTION_DF.get(user_id)
-    if df is not None:
-        return df, _LAST_TRANSACTION_FILENAME.get(user_id)
+    with span("trades.load_statement", **{"statement.kind": "transaction"}) as active:
+        df = _LAST_TRANSACTION_DF.get(user_id)
+        if df is not None:
+            record_cache_hit("transaction_df")
+            return df, _LAST_TRANSACTION_FILENAME.get(user_id)
 
-    # After a manual upload without a transaction statement, having none is the honest answer;
-    # don't substitute a statement from ~/Downloads the user didn't choose.
-    if _USER_MANUAL_UPLOAD.get(user_id):
+        # After a manual upload without a transaction statement, having none is the honest
+        # answer; don't substitute a statement from ~/Downloads the user didn't choose.
+        if _USER_MANUAL_UPLOAD.get(user_id):
+            return None, None
+
+        record_cache_miss("transaction_df")
+        _, latest_trans = find_latest_download_files()
+        if latest_trans and os.path.exists(latest_trans):
+            try:
+                df = pd.read_csv(latest_trans)
+                active.set_attribute("statement.rows", len(df))
+                active.set_attribute("statement.columns", len(df.columns))
+                _LAST_TRANSACTION_DF[user_id] = df
+                _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
+                return df, _LAST_TRANSACTION_FILENAME[user_id]
+            except Exception as e:
+                active.set_attribute("statement.parse_failed", True)
+                logger.warning(
+                    "Could not autoload transaction statement %s: %s",
+                    os.path.basename(latest_trans), e
+                )
         return None, None
-
-    _, latest_trans = find_latest_download_files()
-    if latest_trans and os.path.exists(latest_trans):
-        try:
-            df = pd.read_csv(latest_trans)
-            _LAST_TRANSACTION_DF[user_id] = df
-            _LAST_TRANSACTION_FILENAME[user_id] = os.path.basename(latest_trans)
-            return df, _LAST_TRANSACTION_FILENAME[user_id]
-        except Exception as e:
-            logger.warning(
-                "Could not autoload transaction statement %s: %s", os.path.basename(latest_trans), e
-            )
-    return None, None
 
 @router.get("/waterfall", response_model=List[CashflowItem])
 def get_cashflow_waterfall(user: dict = Depends(get_current_user)):

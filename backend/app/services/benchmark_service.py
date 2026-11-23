@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from backend.app.core.tracing import annotate
+
 # Quote currencies that need no conversion, which is every spelling of pounds and pence Yahoo
 # uses for an LSE listing.
 #
@@ -54,6 +56,29 @@ def deposit_matched_series(
     comparable with a GBP-valued portfolio, and avoiding exactly that is why the LSE trackers are
     used in the first place. Pence quotes need no conversion -- see `GBP_QUOTES`.
     """
+    result = _series(closes, currency, cashflows)
+    # Annotated, not spanned: this is arithmetic over an already-fetched frame, so the question is
+    # "why was the line withheld", not "why was it slow". `symbol` is deliberately absent -- it is
+    # an unvalidated query param, and the server span's `http.url` already carries it.
+    attributes: Dict[str, Any] = {
+        "benchmark.closes": 0 if closes is None else len(closes),
+        "benchmark.cashflows": len(cashflows or []),
+    }
+    if "withheld_reason" in result:
+        attributes["benchmark.withheld_reason"] = result["withheld_reason"]
+    else:
+        attributes["benchmark.deposits_matched"] = result["deposits_matched"]
+        attributes["benchmark.points"] = len(result["points"])
+    annotate(**attributes)
+    return result
+
+
+def _series(
+    closes: Optional[pd.DataFrame],
+    currency: Optional[str],
+    cashflows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """The arithmetic. Split out so the four withheld paths report through one site."""
     if str(currency) not in GBP_QUOTES:
         return {"withheld_reason": BENCHMARK_WITHHELD_NON_GBP_QUOTE}
     if not cashflows:

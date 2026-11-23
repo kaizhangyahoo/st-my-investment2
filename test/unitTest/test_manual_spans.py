@@ -1,105 +1,28 @@
 """Manual spans the auto-instrumentation cannot produce: the provider fan-out must be children
 of the request rather than orphan roots, log lines from its worker threads must stay correlated,
 and a response served from cache must say so on the span."""
-import json
 import logging
 import unittest
-from types import SimpleNamespace
 from unittest import mock
-from urllib.parse import parse_qs, urlparse
 
 try:
-    import requests
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from opentelemetry.trace import SpanKind
 except ImportError:  # pragma: no cover
-    TestClient = None
+    SpanKind = None
 
 from backend.app.core import otel_traces
 from backend.app.core.request_context import RequestContextFilter
 from backend.app.core.tracing import annotate, span
 from backend.app.services import market_service, price_service
+from test.support.tracing import TRACING_AVAILABLE
+from test.support.tracing import StubTransport as _StubTransport
+from test.support.tracing import TracedApp as _TracedApp
+from test.support.tracing import patch_transport as _patch_transport
 
 TICKERS = ["AAA", "BBB", "CCC"]
 
 
-def _settings():
-    return SimpleNamespace(
-        OTEL_EXPORTER_OTLP_ENDPOINT=None,
-        OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf",
-        OTEL_EXPORTER_OTLP_HEADERS=None,
-        OTEL_RESOURCE_ATTRIBUTES="service.namespace=test",
-        OTEL_SERVICE_NAME="test-svc",
-        ENVIRONMENT="test",
-    )
-
-
-def _json_response(request, payload, status=200):
-    response = requests.Response()
-    response.status_code = status
-    response.url = request.url
-    response.request = request
-    response._content = json.dumps(payload).encode()
-    return response
-
-
-class _StubTransport:
-    """Answers the provider hosts without a socket, so `RequestsInstrumentor` still produces a
-    real client span per call -- which is the thing these tests are about."""
-
-    def __init__(self, yahoo_status=200):
-        self.yahoo_status = yahoo_status
-
-    def send(self, request, **kwargs):
-        if "query1.finance.yahoo.com" in request.url:
-            if self.yahoo_status != 200:
-                return _json_response(request, {"finance": None}, self.yahoo_status)
-            meta = {"regularMarketPrice": 101.5, "currency": "USD"}
-            return _json_response(request, {"chart": {"result": [{"meta": meta}]}})
-        if "api.twelvedata.com" in request.url:
-            symbols = parse_qs(urlparse(request.url).query).get("symbol", [""])[0].split(",")
-            quotes = {s: {"close": "42.5"} for s in symbols}
-            # The real API returns a bare quote for a single symbol and a keyed map for several.
-            return _json_response(request, quotes if len(symbols) > 1 else quotes[symbols[0]])
-        raise AssertionError(f"unexpected outbound host: {request.url}")
-
-
-def _patch_transport(stub):
-    return mock.patch.object(requests.adapters.HTTPAdapter, "send", stub.send)
-
-
-class _TracedApp(unittest.TestCase):
-    """A traced app whose one route runs the code under test, exporting spans in memory."""
-
-    def _build(self, handler, path="/api/prices"):
-        from backend.app.core.middleware import RequestContextMiddleware
-        self.exporter = InMemorySpanExporter()
-        app = FastAPI()
-        app.get(path)(handler)
-        app.add_middleware(RequestContextMiddleware)
-        self.path = path
-        self.provider = otel_traces.instrument_app(app, _settings(), exporter=self.exporter)
-        self.client = TestClient(app)
-
-    def tearDown(self):
-        from opentelemetry.instrumentation.requests import RequestsInstrumentor
-        RequestsInstrumentor().uninstrument()
-        self.provider.shutdown()
-        otel_traces._provider = None
-
-    def spans(self):
-        return self.exporter.get_finished_spans()
-
-    def server_span(self):
-        return next(s for s in self.spans() if s.name == f"GET {self.path}")
-
-    def named(self, name):
-        return next(s for s in self.spans() if s.name == name)
-
-
-@unittest.skipIf(TestClient is None, "fastapi / opentelemetry sdk unavailable")
+@unittest.skipIf(not TRACING_AVAILABLE, "fastapi / opentelemetry sdk unavailable")
 class TestProviderFanOutSpans(_TracedApp):
     def setUp(self):
         def prices():
@@ -158,7 +81,7 @@ class TestProviderFanOutSpans(_TracedApp):
         self.assertNotIn("price.eodhd", {s.name for s in self.spans()})
 
 
-@unittest.skipIf(TestClient is None, "fastapi / opentelemetry sdk unavailable")
+@unittest.skipIf(not TRACING_AVAILABLE, "fastapi / opentelemetry sdk unavailable")
 class TestPriceCacheAttributes(_TracedApp):
     def setUp(self):
         market_service.cache.clear()
@@ -174,10 +97,12 @@ class TestPriceCacheAttributes(_TracedApp):
             self.assertEqual(self.client.get(self.path).status_code, 200)
 
         server = self.server_span()
-        self.assertEqual(server.attributes["cache.name"], "current_price")
-        self.assertIs(server.attributes["cache.hit"], False)
-        self.assertEqual(server.attributes["cache.hits"], 0)
-        self.assertEqual(server.attributes["cache.misses"], 3)
+        self.assertIs(server.attributes["cache.current_price.hit"], False)
+        self.assertEqual(server.attributes["cache.current_price.hits"], 0)
+        self.assertEqual(server.attributes["cache.current_price.misses"], 3)
+        # The cache is named by the key, so a second cache on the same span cannot overwrite it.
+        self.assertNotIn("cache.name", server.attributes)
+        self.assertNotIn("cache.hit", server.attributes)
 
     def test_a_fully_cached_response_is_distinguishable_from_one_that_hit_a_provider(self):
         with _patch_transport(_StubTransport()):
@@ -186,9 +111,9 @@ class TestPriceCacheAttributes(_TracedApp):
             self.assertEqual(self.client.get(self.path).status_code, 200)
 
         server = self.server_span()
-        self.assertIs(server.attributes["cache.hit"], True)
-        self.assertEqual(server.attributes["cache.hits"], 3)
-        self.assertEqual(server.attributes["cache.misses"], 0)
+        self.assertIs(server.attributes["cache.current_price.hit"], True)
+        self.assertEqual(server.attributes["cache.current_price.hits"], 3)
+        self.assertEqual(server.attributes["cache.current_price.misses"], 0)
         # Nothing reached a provider, so the request span is the only span in the trace.
         self.assertEqual(len(self.spans()), 1)
 
@@ -206,7 +131,7 @@ class TestHelpersWhileTracingIsOff(unittest.TestCase):
     def test_span_and_annotate_are_inert_without_a_provider(self):
         with span("price.yahoo", **{"price.requested": 1}) as active:
             active.set_attribute("price.priced", 1)
-        annotate(**{"cache.name": "current_price", "cache.hit": True})
+        annotate(**{"cache.current_price.hit": True})
 
 
 if __name__ == "__main__":

@@ -9,7 +9,9 @@ The consequence sentences match what the sidebar already tells the user, so a lo
 support screenshot describe the same event in the same words.
 """
 import logging
-from typing import Any, List, Mapping
+from typing import Any, Dict, List, Mapping
+
+from backend.app.core.tracing import annotate, event
 
 # Beyond this, log the count and a sample rather than a wall of tickers.
 _MAX_LISTED = 20
@@ -37,10 +39,58 @@ def _consequences(dq: Mapping[str, Any]) -> List[str]:
     return out
 
 
+def _attributes(surface: str, dq: Mapping[str, Any]) -> Dict[str, Any]:
+    """`dq` as span attributes: counts and bounded tuples, never a value passed through.
+
+    Mapped key by key rather than iterated, because the two surfaces hand in different shapes
+    and `unconvertible` is a list of dicts, which is not a type a span attribute can hold. A
+    key absent from `dq` stays absent here -- `None` is not a legal attribute value either, so
+    it would be dropped with a warning rather than recorded.
+    """
+    attrs: Dict[str, Any] = {
+        "data_quality.surface": surface,
+        "data_quality.degraded": bool(dq.get("degraded")),
+        "data_quality.fx_fallback": bool(dq.get("fx_fallback")),
+        "data_quality.reasons": tuple(sorted(f for f in _CONSEQUENCES if dq.get(f))),
+    }
+    consequence = "; ".join(_consequences(dq))
+    if consequence:
+        # The same sentence the WARNING carries, so a trace and a support screenshot of the
+        # sidebar describe the event in the same words.
+        attrs["data_quality.consequence"] = consequence
+
+    unpriced = dq.get("unpriced_tickers") or []
+    attrs["data_quality.unpriced_count"] = len(unpriced)
+    if unpriced:
+        attrs["data_quality.unpriced_tickers"] = tuple(sorted(unpriced)[:_MAX_LISTED])
+
+    unconvertible = dq.get("unconvertible") or []
+    attrs["data_quality.unconvertible_count"] = len(unconvertible)
+    if unconvertible:
+        # Only the currencies: the actionable half, and bounded where the ticker list is not.
+        attrs["data_quality.unconvertible_currencies"] = tuple(
+            sorted({row.get("currency") or "unknown" for row in unconvertible})
+        )
+
+    attrs["data_quality.failure_count"] = len(dq.get("failures") or [])
+    for field in ("skipped_dates", "fx_unbacked_dates"):
+        if field in dq:
+            attrs[f"data_quality.{field}"] = int(dq[field])
+    return attrs
+
+
 def log_data_quality(logger: logging.Logger, surface: str, dq: Mapping[str, Any]) -> None:
-    """Log one line describing a response's data quality. Read-only on `dq`."""
+    """Log one line describing a response's data quality, and mirror it onto the current span.
+
+    Read-only on `dq`. The span attributes land on the request span -- no manual span is open
+    by the time a router reaches here -- so "show me degraded requests" is one Tempo filter.
+    Degradation never sets span status: it is a successful response carrying a caveat, and
+    marking it an error would make the error rate useless.
+    """
     if not dq:
         return
+
+    annotate(**_attributes(surface, dq))
 
     context = {
         "surface": surface,
@@ -53,10 +103,12 @@ def log_data_quality(logger: logging.Logger, surface: str, dq: Mapping[str, Any]
 
     if dq.get("degraded"):
         consequences = _consequences(dq)
+        detail = "; ".join(consequences) or "see context for details"
+        event("data_quality.degraded", surface=surface, consequence=detail)
         logger.warning(
             "%s is serving degraded data: %s",
             surface,
-            "; ".join(consequences) or "see context for details",
+            detail,
             extra=context,
         )
     elif failures:

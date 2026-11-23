@@ -46,6 +46,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from backend.app.core.tracing import span
 from backend.app.services.risk_metrics import TIMEFRAME_MONTHS, TIMEFRAMES
 from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker
 
@@ -288,29 +289,36 @@ def _apply_corporate_action(
 
 def compute_disposals(df_trade_history: pd.DataFrame) -> Dict[str, Any]:
     """Every disposal in the statement, oldest first, plus what had to be left out."""
-    rows = _prepare(df_trade_history)
-    positions: Dict[str, _Position] = {}
-    disposals: List[Disposal] = []
-    cash_events: List[Dict[str, Any]] = []
+    with span("realised.disposals") as active:
+        rows = _prepare(df_trade_history)
+        active.set_attribute("trades.rows", len(rows))
+        positions: Dict[str, _Position] = {}
+        disposals: List[Disposal] = []
+        cash_events: List[Dict[str, Any]] = []
 
-    if not rows.empty:
-        for date, day in rows.groupby("date", sort=True):
-            actions = day[day["is_ca"]]
-            if not actions.empty:
-                _apply_corporate_action(str(date), actions, positions, disposals, cash_events)
-            for row in day[~day["is_ca"]].itertuples():
-                _apply_trade(row, positions, disposals)
+        if not rows.empty:
+            for date, day in rows.groupby("date", sort=True):
+                actions = day[day["is_ca"]]
+                if not actions.empty:
+                    _apply_corporate_action(str(date), actions, positions, disposals, cash_events)
+                for row in day[~day["is_ca"]].itertuples():
+                    _apply_trade(row, positions, disposals)
 
-    corporate_actions = int(rows["is_ca"].sum()) if not rows.empty else 0
-    excluded = sorted({d.ticker for d in disposals if not d.included})
-    return {
-        "disposals": disposals,
-        "corporate_action_rows": corporate_actions,
-        "corporate_action_cash_gbp": float(sum(e["amount_gbp"] for e in cash_events)),
-        "corporate_action_cash_events": cash_events,
-        "excluded_tickers": excluded,
-        "excluded_disposals": sum(1 for d in disposals if not d.included),
-    }
+        corporate_actions = int(rows["is_ca"].sum()) if not rows.empty else 0
+        excluded = sorted({d.ticker for d in disposals if not d.included})
+        excluded_disposals = sum(1 for d in disposals if not d.included)
+        active.set_attribute("disposals.count", len(disposals))
+        # Counted, not named: the excluded tickers are already in the response the tile reads.
+        active.set_attribute("disposals.excluded", excluded_disposals)
+        active.set_attribute("corporate_action.rows", corporate_actions)
+        return {
+            "disposals": disposals,
+            "corporate_action_rows": corporate_actions,
+            "corporate_action_cash_gbp": float(sum(e["amount_gbp"] for e in cash_events)),
+            "corporate_action_cash_events": cash_events,
+            "excluded_tickers": excluded,
+            "excluded_disposals": excluded_disposals,
+        }
 
 
 def realised_for(
@@ -359,19 +367,25 @@ def all_windows(disposals: List[Disposal]) -> Dict[str, Dict[str, Any]]:
     bounds it actually covered, so the tile can state its own period instead of borrowing the
     curve's (KAN-27).
     """
-    included = [d for d in disposals if d.included]
-    last = max((d.date for d in included), default=None)
-    windows: Dict[str, Dict[str, Any]] = {}
-    for timeframe in TIMEFRAMES:
-        months = TIMEFRAME_MONTHS.get(timeframe)
-        start = None
-        if last is not None and months is not None:
-            start = (pd.Timestamp(last) - pd.DateOffset(months=months)).strftime("%Y-%m-%d")
-        windows[timeframe] = {
-            **realised_for(disposals, start, None),
-            "timeframe": timeframe,
-        }
-    return windows
+    # One span, not one per timeframe: each window is a list comprehension over the same
+    # disposals, so the pair of counts is what makes the repeated pass visible rather than seven
+    # trivial children.
+    with span("realised.windows") as active:
+        included = [d for d in disposals if d.included]
+        active.set_attribute("disposals.included", len(included))
+        last = max((d.date for d in included), default=None)
+        windows: Dict[str, Dict[str, Any]] = {}
+        for timeframe in TIMEFRAMES:
+            months = TIMEFRAME_MONTHS.get(timeframe)
+            start = None
+            if last is not None and months is not None:
+                start = (pd.Timestamp(last) - pd.DateOffset(months=months)).strftime("%Y-%m-%d")
+            windows[timeframe] = {
+                **realised_for(disposals, start, None),
+                "timeframe": timeframe,
+            }
+        active.set_attribute("windows.count", len(windows))
+        return windows
 
 
 def realised_by_ticker(disposals: List[Disposal]) -> Dict[str, float]:

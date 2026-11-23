@@ -3,6 +3,12 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from functools import wraps
 import threading
 
+from backend.app.core.tracing import (
+    record_cache_hit,
+    record_cache_miss,
+    record_cache_uncacheable,
+)
+
 # Tells "no entry" apart from "an entry whose value is None". Overloading None with both
 # meanings left a decorated function no way to refuse caching except to return None, so a
 # failure that came back as a value instead -- an empty frame, an approximated rate -- was
@@ -35,7 +41,11 @@ class TTLCache:
 
 cache = TTLCache(default_ttl=3600)
 
-def ttl_cache(ttl: int = 3600, cache_if: Optional[Callable[[Any], bool]] = None):
+def ttl_cache(
+    ttl: int = 3600,
+    cache_if: Optional[Callable[[Any], bool]] = None,
+    name: Optional[str] = None,
+):
     """Memoise `func` on its arguments for `ttl` seconds.
 
     `cache_if` decides whether a result is worth keeping, and is the only way to say "do not
@@ -44,17 +54,27 @@ def ttl_cache(ttl: int = 3600, cache_if: Optional[Callable[[Any], bool]] = None)
     request is answered from it instead of retrying. A successful-but-empty answer -- a
     delisted ticker -- is a real answer and must still cache, so the predicate belongs at the
     decoration site where the difference is known, not in here.
+
+    `name` is what the lookups are counted under on the enclosing span, and is worth stating at
+    the decoration site: defaulting to `func.__name__` would publish `cache._fetch_ohlc.hits`
+    in Tempo, a private identifier that renames whenever the function does.
     """
     def decorator(func: Callable):
+        counter = name or func.__name__
+
         @wraps(func)
         def wrapper(*args, **kwargs):
             key = (func.__name__, str(args), str(sorted(kwargs.items())))
             cached_res = cache.get(key, MISS)
             if cached_res is not MISS:
+                record_cache_hit(counter)
                 return cached_res
+            record_cache_miss(counter)
             res = func(*args, **kwargs)
             if cache_if is None or cache_if(res):
                 cache.set(key, res, ttl=ttl)
+            else:
+                record_cache_uncacheable(counter)
             return res
         return wrapper
     return decorator

@@ -2,6 +2,7 @@ import re
 from typing import List, Dict, Any, Optional, Tuple
 from backend.app.core.config import settings
 from backend.app.core.cache import MISS, cache
+from backend.app.core.tracing import record_cache_hit, record_cache_miss, span
 
 # Yahoo's suffix for each exchange Trading 212 lists on. Yahoo is what every chart in this app
 # reads from (`market_service.get_ohlc`), and it keys on exchange, so an instrument cannot be
@@ -89,51 +90,79 @@ def _chart_symbols(client) -> Dict[str, str]:
     An instrument on an exchange Yahoo does not cover is simply absent, which the caller reports
     as "not chartable" rather than guessing a symbol that resolves to something else.
     """
-    cached = cache.get(_SYMBOL_KEY, MISS)
-    if cached is not MISS:
-        return cached
+    # The span covers the cache check as well as the build, and sits inside the function rather
+    # than at each of its three call sites, so a hit is attributable wherever it is reached.
+    with span("t212.instruments") as active:
+        cached = cache.get(_SYMBOL_KEY, MISS)
+        if cached is not MISS:
+            record_cache_hit("t212_instruments")
+            active.set_attribute("t212.instruments", len(cached))
+            return cached
+        # A miss costs two calls out of 6 requests/minute against an 18.5k-instrument payload,
+        # which is why it is counted rather than merely implied by the span's duration.
+        record_cache_miss("t212_instruments")
 
-    exchange_by_schedule: Dict[int, str] = {}
-    for exchange in client.get_exchanges() or []:
-        name = str(exchange.get("name") or "")
-        for schedule in exchange.get("workingSchedules") or []:
-            if schedule.get("id") is not None:
-                exchange_by_schedule[int(schedule["id"])] = name
+        exchange_by_schedule: Dict[int, str] = {}
+        for exchange in client.get_exchanges() or []:
+            name = str(exchange.get("name") or "")
+            for schedule in exchange.get("workingSchedules") or []:
+                if schedule.get("id") is not None:
+                    exchange_by_schedule[int(schedule["id"])] = name
 
-    symbols: Dict[str, str] = {}
-    for inst in client.get_instruments() or []:
-        ticker, short = inst.get("ticker"), inst.get("shortName")
-        schedule = inst.get("workingScheduleId")
-        if not ticker or not short or schedule is None:
-            continue
-        suffix = _YAHOO_SUFFIX_BY_EXCHANGE.get(exchange_by_schedule.get(int(schedule), ""))
-        if suffix is None:
-            continue
-        symbols[str(ticker)] = f"{short}{suffix}"
+        symbols: Dict[str, str] = {}
+        for inst in client.get_instruments() or []:
+            ticker, short = inst.get("ticker"), inst.get("shortName")
+            schedule = inst.get("workingScheduleId")
+            if not ticker or not short or schedule is None:
+                continue
+            suffix = _YAHOO_SUFFIX_BY_EXCHANGE.get(exchange_by_schedule.get(int(schedule), ""))
+            if suffix is None:
+                continue
+            symbols[str(ticker)] = f"{short}{suffix}"
 
-    cache.set(_SYMBOL_KEY, symbols, ttl=_SYMBOL_TTL)
-    return symbols
+        cache.set(_SYMBOL_KEY, symbols, ttl=_SYMBOL_TTL)
+        active.set_attribute("t212.instruments", len(symbols))
+        active.set_attribute("t212.exchanges", len(exchange_by_schedule))
+        return symbols
 
 
-def _paginate(fetch, max_pages: int) -> Tuple[List[Dict[str, Any]], bool]:
+def _paginate(fetch, max_pages: int, operation: str) -> Tuple[List[Dict[str, Any]], bool]:
     """Walk `nextPagePath` up to `max_pages`, reporting whether anything was left behind.
 
-    The cursor is read back out of `nextPagePath` because that is the only place the API
-    publishes it; the `cursor` query parameter it names is what the client accepts.
+    `operation` names the span, because `fetch` is an opaque lambda that cannot name itself. Two
+    literal values, so the span name stays bounded.
+    """
+    with span(f"t212.{operation}", **{"t212.max_pages": max_pages}) as active:
+        items, truncated, pages = _walk_pages(fetch, max_pages)
+        active.set_attribute("t212.pages", pages)
+        active.set_attribute("t212.items", len(items))
+        # Nothing records this today, and it is the whole reason the panel shows a window rather
+        # than the account: each page costs one of 6 requests/minute.
+        active.set_attribute("t212.truncated", truncated)
+        return items, truncated
+
+
+def _walk_pages(fetch, max_pages: int) -> Tuple[List[Dict[str, Any]], bool, int]:
+    """The walk itself, plus how many pages it fetched. Split out because its three in-loop
+    returns leave nowhere to set the attributes once; the cursor is read back out of
+    `nextPagePath` because that is the only place the API publishes it, and the `cursor` query
+    parameter it names is what the client accepts.
     """
     items: List[Dict[str, Any]] = []
     cursor: Optional[int] = None
+    pages = 0
     for _ in range(max_pages):
         page = fetch(cursor) or {}
+        pages += 1
         items.extend(page.get("items") or [])
         next_path = page.get("nextPagePath")
         if not next_path:
-            return items, False
+            return items, False, pages
         match = re.search(r"cursor=(\d+)", str(next_path))
         if not match:
-            return items, True
+            return items, True, pages
         cursor = int(match.group(1))
-    return items, True
+    return items, True, pages
 
 
 def _fill_fees(wallet: Dict[str, Any]) -> Optional[float]:
@@ -173,6 +202,7 @@ def fetch_t212_orders(
     raw, truncated = _paginate(
         lambda cursor: client.get_historical_orders(cursor=cursor, limit=_HISTORY_PAGE),
         max_pages,
+        operation="orders_history",
     )
 
     orders = []
@@ -230,6 +260,7 @@ def fetch_t212_dividends(
     raw, truncated = _paginate(
         lambda cursor: client.get_dividends(cursor=cursor, limit=_HISTORY_PAGE),
         max_pages,
+        operation="dividends_history",
     )
 
     dividends = []

@@ -4,7 +4,7 @@ import requests
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from backend.app.core.cache import MISS, cache, ttl_cache
-from backend.app.core.tracing import annotate
+from backend.app.core.tracing import annotate, span
 from backend.app.services import fx_store
 from backend.app.services.price_service import get_prices, fetch_yahoo_history
 
@@ -54,13 +54,16 @@ def get_current_prices(
             cached[ticker] = price
 
     # On the request span, not a span of their own: a hit is the absence of work, and one span
-    # per lookup would dwarf the trace. `cache.hit` means every ticker came from the cache, so
-    # a response that touched no provider is distinguishable from one that did.
+    # per lookup would dwarf the trace. `cache.current_price.hit` means every ticker came from
+    # the cache, so a response that touched no provider is distinguishable from one that did.
+    #
+    # Counted by hand rather than through `record_cache_hit`: this is one pass over the whole
+    # requested list, so a single accurate flush is available here, and there is no span of this
+    # function's own for an accumulator to land on.
     annotate(**{
-        "cache.name": "current_price",
-        "cache.hit": not uncached,
-        "cache.hits": len(cached),
-        "cache.misses": len(uncached),
+        "cache.current_price.hit": not uncached,
+        "cache.current_price.hits": len(cached),
+        "cache.current_price.misses": len(uncached),
     })
 
     if not uncached:
@@ -93,7 +96,7 @@ def _as_series(rates: Dict[str, float]) -> pd.Series:
 # Only a complete, real answer is cached. A fetch that failed must leave the key free, or one
 # SSL error outlives the outage by an hour (KAN-53) -- here it would also hold back today's rate
 # while `fx_store` is perfectly able to serve yesterday's.
-@ttl_cache(ttl=3600, cache_if=lambda result: not result[1])
+@ttl_cache(ttl=3600, cache_if=lambda result: not result[1], name="historical_fx")
 def get_historical_fx(start_date: str) -> Tuple[Dict[str, pd.Series], bool]:
     """Historical GBP crosses, plus a flag saying whether the FX feed answered in full.
 
@@ -150,7 +153,7 @@ def get_historical_fx(start_date: str) -> Tuple[Dict[str, pd.Series], bool]:
 
     return {pair: _as_series(rates) for pair, rates in combined.items()}, incomplete
 
-@ttl_cache(ttl=3600, cache_if=lambda result: result is not None)
+@ttl_cache(ttl=3600, cache_if=lambda result: result is not None, name="ohlc")
 def _fetch_ohlc(ticker: str, start_date: str) -> Optional[pd.DataFrame]:
     """Returns None on a provider failure, which `cache_if` then refuses to store. That keeps a
     transient 429 from pinning an empty chart for the whole hour, while a successful-but-empty
@@ -163,10 +166,13 @@ def _fetch_ohlc(ticker: str, start_date: str) -> Optional[pd.DataFrame]:
 
 
 def get_ohlc(ticker: str, start_date: str) -> pd.DataFrame:
-    df = _fetch_ohlc(ticker, start_date)
-    return pd.DataFrame(columns=['Date', 'close']) if df is None else df
+    # The span exists to give `cache.ohlc.*` somewhere to land: a counter with no enclosing span
+    # is dropped silently, and the chart route opens none of its own.
+    with span("market.ohlc"):
+        df = _fetch_ohlc(ticker, start_date)
+        return pd.DataFrame(columns=['Date', 'close']) if df is None else df
 
-@ttl_cache(ttl=3600, cache_if=lambda result: result is not None)
+@ttl_cache(ttl=3600, cache_if=lambda result: result is not None, name="price_history")
 def _fetch_price_history(
     ticker: str, start_date: str
 ) -> Optional[Tuple[pd.DataFrame, Optional[str]]]:

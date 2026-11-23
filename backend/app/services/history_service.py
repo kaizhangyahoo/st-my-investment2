@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from backend.app.core.config import settings
+from backend.app.core.tracing import span
 from backend.app.services import fx_store
 from backend.app.services.market_service import get_historical_fx, get_price_history
 from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker
@@ -80,23 +81,31 @@ def _fx_frames(
     carries the last rate forward indefinitely and silently, so the caller needs to know where
     the real rates stop before it persists anything (KAN-55).
     """
-    fx_dict, fx_fallback = get_historical_fx(start_date)
-    aligned = {}
-    ends = []
-    for pair, series in fx_dict.items():
-        s = pd.Series(series).sort_index()
-        s.index = pd.to_datetime(s.index).normalize()
-        s = s[~s.index.duplicated(keep="last")]
-        if len(s):
-            ends.append(s.index.max())
-        aligned[pair] = s.reindex(s.index.union(index)).ffill().reindex(index)
-    # A degraded feed with nothing in the store is the one case where the series are the
-    # approximated constants rather than real closes, so their index says nothing about what is
-    # backed: `get_historical_fx` only falls back once every stored rate has been exhausted, and
-    # it stores every real close it fetches.
-    approximated = fx_fallback and fx_store.covered_through() is None
-    real_through = None if approximated or not ends else min(ends)
-    return aligned, fx_fallback, real_through
+    with span("history.fx_frames") as active:
+        fx_dict, fx_fallback = get_historical_fx(start_date)
+        aligned = {}
+        ends = []
+        for pair, series in fx_dict.items():
+            s = pd.Series(series).sort_index()
+            s.index = pd.to_datetime(s.index).normalize()
+            s = s[~s.index.duplicated(keep="last")]
+            if len(s):
+                ends.append(s.index.max())
+            aligned[pair] = s.reindex(s.index.union(index)).ffill().reindex(index)
+        # A degraded feed with nothing in the store is the one case where the series are the
+        # approximated constants rather than real closes, so their index says nothing about what
+        # is backed: `get_historical_fx` only falls back once every stored rate has been
+        # exhausted, and it stores every real close it fetches.
+        approximated = fx_fallback and fx_store.covered_through() is None
+        real_through = None if approximated or not ends else min(ends)
+
+        active.set_attribute("fx.pairs", len(aligned))
+        active.set_attribute("fx.fallback", fx_fallback)
+        if real_through is not None:
+            # Omitted rather than null when there is nothing real behind any date: None is not a
+            # legal attribute value, and the absence is the same statement.
+            active.set_attribute("fx.real_through", real_through.strftime("%Y-%m-%d"))
+        return aligned, fx_fallback, real_through
 
 
 def _price_frame(
@@ -106,15 +115,24 @@ def _price_frame(
     closes: Dict[str, pd.Series] = {}
     currencies: Dict[str, Optional[str]] = {}
     unpriced: List[str] = []
-    for ticker in tickers:
-        df, currency = get_price_history(ticker, start_date)
-        if df.empty:
-            unpriced.append(ticker)
-            continue
-        index = pd.DatetimeIndex(pd.to_datetime(df["Date"])).normalize()
-        s = pd.Series(df["close"].values, index=index)
-        closes[ticker] = s[~s.index.duplicated(keep="last")].sort_index()
-        currencies[ticker] = currency
+    with span("history.price_frame", **{"price.tickers": len(tickers)}) as active:
+        for ticker in tickers:
+            # One span per ticker: this loop is sequential, so it is the suspected bottleneck of
+            # the whole route, and an aggregate would hide which ticker cost the time. The
+            # ticker is an attribute value, never part of the span name, so the name stays one
+            # constant per site.
+            with span("history.price_history", **{"price.ticker": ticker}) as fetch:
+                df, currency = get_price_history(ticker, start_date)
+                fetch.set_attribute("price.rows", len(df))
+                fetch.set_attribute("price.currency", currency or "unknown")
+            if df.empty:
+                unpriced.append(ticker)
+                continue
+            index = pd.DatetimeIndex(pd.to_datetime(df["Date"])).normalize()
+            s = pd.Series(df["close"].values, index=index)
+            closes[ticker] = s[~s.index.duplicated(keep="last")].sort_index()
+            currencies[ticker] = currency
+        active.set_attribute("price.unpriced", len(unpriced))
     return closes, currencies, unpriced
 
 
@@ -127,27 +145,35 @@ def _to_gbp(
     """Wide Date x Ticker frame of GBP closes. Unconvertible tickers are dropped, not zeroed."""
     gbp: Dict[str, pd.Series] = {}
     unconvertible: List[Dict[str, str]] = []
-    for ticker, series in closes.items():
-        aligned = series.reindex(index)
-        currency = (currencies.get(ticker) or "").strip()
-        if currency == "GBP":
-            gbp[ticker] = aligned
-        elif currency == "GBp":
-            gbp[ticker] = aligned / 100.0
-        elif currency in _FX_PAIR:
-            rate = fx.get(_FX_PAIR[currency])
-            gbp[ticker] = aligned / rate if rate is not None else pd.Series(float("nan"), index=index)
-        else:
-            unconvertible.append({"ticker": ticker, "currency": currency or "unknown"})
-    frame = pd.DataFrame(gbp, index=index) if gbp else pd.DataFrame(index=index)
+    with span("history.to_gbp", **{"price.tickers": len(closes)}) as active:
+        for ticker, series in closes.items():
+            aligned = series.reindex(index)
+            currency = (currencies.get(ticker) or "").strip()
+            if currency == "GBP":
+                gbp[ticker] = aligned
+            elif currency == "GBp":
+                gbp[ticker] = aligned / 100.0
+            elif currency in _FX_PAIR:
+                rate = fx.get(_FX_PAIR[currency])
+                gbp[ticker] = (
+                    aligned / rate if rate is not None else pd.Series(float("nan"), index=index)
+                )
+            else:
+                unconvertible.append({"ticker": ticker, "currency": currency or "unknown"})
+        frame = pd.DataFrame(gbp, index=index) if gbp else pd.DataFrame(index=index)
+        active.set_attribute("price.unconvertible", len(unconvertible))
     return frame, unconvertible
 
 
 def _holdings_frame(trades: pd.DataFrame, index: pd.DatetimeIndex) -> pd.DataFrame:
     """Signed quantity held per ticker as of each date in `index`."""
-    pivot = trades.pivot_table(index="Date", columns="Ticker", values="Quantity", aggfunc="sum")
-    combined = pivot.index.union(index)
-    return pivot.reindex(combined).fillna(0.0).cumsum().reindex(index)
+    with span("history.holdings", **{"holdings.days": len(index)}) as active:
+        pivot = trades.pivot_table(
+            index="Date", columns="Ticker", values="Quantity", aggfunc="sum"
+        )
+        combined = pivot.index.union(index)
+        active.set_attribute("holdings.tickers", len(pivot.columns))
+        return pivot.reindex(combined).fillna(0.0).cumsum().reindex(index)
 
 
 def _value_series(holdings: pd.DataFrame, prices_gbp: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
@@ -157,11 +183,13 @@ def _value_series(holdings: pd.DataFrame, prices_gbp: pd.DataFrame) -> Tuple[pd.
     lacks a close that day is invalid -- legacy matched the date exactly rather than carrying
     the last known price forward, and valuing a partial portfolio would understate the total.
     """
-    prices = prices_gbp.reindex(columns=holdings.columns)
-    held = holdings.fillna(0.0) != 0
-    invalid = (held & prices.isna()).any(axis=1)
-    values = (holdings.where(held, 0.0) * prices.fillna(0.0)).sum(axis=1)
-    return values, invalid
+    with span("history.value_series", **{"value.days": len(holdings.index)}) as active:
+        prices = prices_gbp.reindex(columns=holdings.columns)
+        held = holdings.fillna(0.0) != 0
+        invalid = (held & prices.isna()).any(axis=1)
+        values = (holdings.where(held, 0.0) * prices.fillna(0.0)).sum(axis=1)
+        active.set_attribute("value.invalid_days", int(invalid.sum()))
+        return values, invalid
 
 
 def _fx_unbacked(
@@ -191,21 +219,33 @@ def _fx_unbacked(
 
 
 def _read_cache_file() -> Dict[str, Dict[str, float]]:
-    path = settings.PORTFOLIO_VALUES_FILE
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-    except (OSError, ValueError) as e:
-        logger.warning(
-            "Could not read %s: %s. Treating the history cache as empty, so the whole "
-            "series recomputes from scratch.",
-            path,
-            e,
-        )
-        return {}
-    return data if isinstance(data, dict) else {}
+    # Spanned because one request reaches here several times -- the compute path reads it, and so
+    # does every helper that answers a question about the stored keys. Seeing the repeats is the
+    # point; the path itself is not recorded, since it is a log concern and a span attribute is a
+    # different retention domain.
+    with span("history.cache_read") as active:
+        path = settings.PORTFOLIO_VALUES_FILE
+        if not os.path.exists(path):
+            active.set_attribute("cache.accounts", 0)
+            active.set_attribute("cache.bytes", 0)
+            return {}
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            logger.warning(
+                "Could not read %s: %s. Treating the history cache as empty, so the whole "
+                "series recomputes from scratch.",
+                path,
+                e,
+            )
+            active.set_attribute("cache.accounts", 0)
+            active.set_attribute("cache.read_failed", True)
+            return {}
+        data = data if isinstance(data, dict) else {}
+        active.set_attribute("cache.accounts", len(data))
+        active.set_attribute("cache.bytes", os.path.getsize(path))
+        return data
 
 
 def _merge_and_write(key: str, new_values: Dict[str, float], replace: bool = False) -> None:
@@ -216,26 +256,31 @@ def _merge_and_write(key: str, new_values: Dict[str, float], replace: bool = Fal
     """
     if not new_values and not replace:
         return
-    path = settings.PORTFOLIO_VALUES_FILE
-    data = _read_cache_file()
-    if replace:
-        data[key] = {}
-    data.setdefault(key, {}).update(new_values)
-    directory = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".portfolio_values_", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, path)
-    except OSError as e:
-        logger.error(
-            "Could not persist history cache to %s: %s. This run's computed values are lost "
-            "and the next load recomputes them.",
-            path,
-            e,
-        )
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    attributes = {"cache.days_written": len(new_values), "cache.replace": replace}
+    # `key` is `ig:<firebase sub>`, so it stays out of the attributes: a user id belongs in a log
+    # line, not on a span.
+    with span("history.cache_write", **attributes) as active:
+        path = settings.PORTFOLIO_VALUES_FILE
+        data = _read_cache_file()
+        if replace:
+            data[key] = {}
+        data.setdefault(key, {}).update(new_values)
+        directory = os.path.dirname(path) or "."
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".portfolio_values_", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, path)
+        except OSError as e:
+            active.set_attribute("cache.write_failed", True)
+            logger.error(
+                "Could not persist history cache to %s: %s. This run's computed values are lost "
+                "and the next load recomputes them.",
+                path,
+                e,
+            )
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
 
 def read_cached_series(key: str) -> List[Dict[str, Any]]:
@@ -290,63 +335,78 @@ def compute_history(
         "unpriced_tickers": [],
         "unconvertible": [],
     }
-    trades = _normalise_trades(df_trade_history)
-    if trades.empty:
+    with span("history.compute", **{"history.force_recompute": force_recompute}) as active:
+        trades = _normalise_trades(df_trade_history)
+        active.set_attribute("trades.rows", len(trades))
+        if trades.empty:
+            return {
+                "points": read_cached_series(key),
+                "computed_at": datetime.now(timezone.utc).isoformat(),
+                "data_quality": empty_quality,
+            }
+
+        start_date = trades["Date"].min().strftime("%Y-%m-%d")
+        tickers = sorted(trades["Ticker"].unique())
+        active.set_attribute("history.tickers", len(tickers))
+        closes, currencies, unpriced = _price_frame(tickers, start_date)
+        active.set_attribute("history.unpriced", len(unpriced))
+
+        if not closes:
+            quality = {**empty_quality, "degraded": True, "unpriced_tickers": unpriced}
+            return {
+                "points": read_cached_series(key),
+                "computed_at": datetime.now(timezone.utc).isoformat(),
+                "data_quality": quality,
+            }
+
+        all_dates = pd.DatetimeIndex(sorted(set().union(*(s.index for s in closes.values()))))
+        trading_days = all_dates[all_dates >= trades["Date"].min()]
+
+        cached = _read_cache_file().get(key, {}) if not force_recompute else {}
+        pending = pd.DatetimeIndex(
+            [d for d in trading_days if d.strftime("%Y-%m-%d") not in cached]
+        )
+        # In cache vocabulary because that is what this filter is: a hit/miss over the shared
+        # portfolio-values file. `misses == 0` says the request valued nothing and reached no
+        # provider, which is the same question the per-cache counters answer elsewhere.
+        active.set_attribute("cache.history_days.hits", len(trading_days) - len(pending))
+        active.set_attribute("cache.history_days.misses", len(pending))
+        active.set_attribute("cache.history_days.hit", not len(pending))
+
+        skipped = 0
+        fx_unbacked = 0
+        unconvertible: List[Dict[str, str]] = []
+        fx_degraded = False
+        if len(pending):
+            fx, fx_degraded, fx_real_through = _fx_frames(start_date, pending)
+            prices_gbp, unconvertible = _to_gbp(closes, currencies, fx, pending)
+            holdings = _holdings_frame(trades, pending)
+            values, invalid = _value_series(holdings, prices_gbp)
+            skipped = int(invalid.sum())
+            unbacked = _fx_unbacked(holdings, currencies, fx_real_through)
+            fx_unbacked = int(unbacked.sum())
+            fresh = {
+                d.strftime("%Y-%m-%d"): float(v)
+                for d, v in values[~(invalid | unbacked)].items()
+                if pd.notna(v)
+            }
+            _merge_and_write(key, fresh, replace=force_recompute)
+
+        # Withholding the unsound dates is what lets this flag mean something on a cache hit: a
+        # stored series contains only dates valued on a real rate, so `False` is a statement
+        # about the points being returned and not just about a request that recomputed nothing.
+        points = read_cached_series(key)
         return {
-            "points": read_cached_series(key),
+            "points": points,
             "computed_at": datetime.now(timezone.utc).isoformat(),
-            "data_quality": empty_quality,
+            "data_quality": {
+                "degraded": bool(
+                    unpriced or unconvertible or skipped or fx_degraded or fx_unbacked
+                ),
+                "fx_fallback": bool(fx_degraded or fx_unbacked),
+                "skipped_dates": skipped,
+                "fx_unbacked_dates": fx_unbacked,
+                "unpriced_tickers": sorted(unpriced),
+                "unconvertible": unconvertible,
+            },
         }
-
-    start_date = trades["Date"].min().strftime("%Y-%m-%d")
-    closes, currencies, unpriced = _price_frame(sorted(trades["Ticker"].unique()), start_date)
-
-    if not closes:
-        quality = {**empty_quality, "degraded": True, "unpriced_tickers": unpriced}
-        return {
-            "points": read_cached_series(key),
-            "computed_at": datetime.now(timezone.utc).isoformat(),
-            "data_quality": quality,
-        }
-
-    all_dates = pd.DatetimeIndex(sorted(set().union(*(s.index for s in closes.values()))))
-    trading_days = all_dates[all_dates >= trades["Date"].min()]
-
-    cached = _read_cache_file().get(key, {}) if not force_recompute else {}
-    pending = pd.DatetimeIndex([d for d in trading_days if d.strftime("%Y-%m-%d") not in cached])
-
-    skipped = 0
-    fx_unbacked = 0
-    unconvertible: List[Dict[str, str]] = []
-    fx_degraded = False
-    if len(pending):
-        fx, fx_degraded, fx_real_through = _fx_frames(start_date, pending)
-        prices_gbp, unconvertible = _to_gbp(closes, currencies, fx, pending)
-        holdings = _holdings_frame(trades, pending)
-        values, invalid = _value_series(holdings, prices_gbp)
-        skipped = int(invalid.sum())
-        unbacked = _fx_unbacked(holdings, currencies, fx_real_through)
-        fx_unbacked = int(unbacked.sum())
-        fresh = {
-            d.strftime("%Y-%m-%d"): float(v)
-            for d, v in values[~(invalid | unbacked)].items()
-            if pd.notna(v)
-        }
-        _merge_and_write(key, fresh, replace=force_recompute)
-
-    # Withholding the unsound dates is what lets this flag mean something on a cache hit: a
-    # stored series contains only dates valued on a real rate, so `False` is a statement about
-    # the points being returned and not just about a request that recomputed nothing.
-    points = read_cached_series(key)
-    return {
-        "points": points,
-        "computed_at": datetime.now(timezone.utc).isoformat(),
-        "data_quality": {
-            "degraded": bool(unpriced or unconvertible or skipped or fx_degraded or fx_unbacked),
-            "fx_fallback": bool(fx_degraded or fx_unbacked),
-            "skipped_dates": skipped,
-            "fx_unbacked_dates": fx_unbacked,
-            "unpriced_tickers": sorted(unpriced),
-            "unconvertible": unconvertible,
-        },
-    }
