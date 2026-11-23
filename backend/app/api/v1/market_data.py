@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from typing import List, Dict, Optional, Any
 from backend.app.services.market_service import get_current_prices, get_historical_fx, get_ohlc
+from backend.app.services import fx_store
 from backend.app.core.diagnostics import log_data_quality
 from backend.app.core.security import get_current_user
 
@@ -33,7 +34,21 @@ def get_fx(start_date: str = "2023-01-01", user: dict = Depends(get_current_user
         "degraded": fx_fallback,
         "fx_fallback": fx_fallback,
     })
-    return {pair: series.to_dict() for pair, series in fx.items()}
+    # With no real close stored inside the window, the series are the approximated constants
+    # broadcast across every date. Withhold them rather than serve a flat line the client would
+    # read as real (KAN-62); pair keys stay so the shape does not change, and it stays a 200.
+    covered = fx_store.covered_through()
+    approximated = fx_fallback and (covered is None or covered < start_date)
+    body: Dict[str, Any] = {
+        pair: {} if approximated else series.to_dict() for pair, series in fx.items()
+    }
+    data_quality: Dict[str, Any] = {"degraded": fx_fallback, "fx_fallback": fx_fallback}
+    if approximated:
+        data_quality["unavailable_reason"] = (
+            "FX provider unreachable and no real rates stored; approximated rates withheld"
+        )
+    body["data_quality"] = data_quality
+    return body
 
 @router.get("/ohlc/{ticker}")
 def get_ticker_ohlc(ticker: str, start_date: str = "2023-01-01", user: dict = Depends(get_current_user)):
