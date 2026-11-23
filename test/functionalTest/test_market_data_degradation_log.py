@@ -93,14 +93,41 @@ class TestQuotesDegradationLog(_Case):
 
 @unittest.skipIf(TestClient is None, "fastapi.testclient unavailable")
 class TestFxFallbackLog(_Case):
-    def _get(self, fallback):
-        with patch.object(market_data, "get_historical_fx", lambda start: (FX, fallback)):
+    def _get(self, fallback, covered="2024-01-02"):
+        with patch.object(market_data, "get_historical_fx", lambda start: (FX, fallback)), \
+                patch.object(market_data.fx_store, "covered_through", lambda: covered):
             with self.assertLogs(LOGGER, logging.DEBUG) as captured:
                 res = self.client.get("/api/v1/market-data/fx")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(list(res.json()), ["GBPUSD=X"])
+        self.assertEqual(sorted(res.json()), ["GBPUSD=X", "data_quality"])
         self.assertEqual(len(captured.records), 1)
+        self.response = res.json()
         return captured.records[0]
+
+    def test_a_clean_answer_carries_a_clean_data_quality_block(self):
+        self._get(False)
+
+        self.assertEqual(self.response["data_quality"], {"degraded": False, "fx_fallback": False})
+        self.assertEqual(len(self.response["GBPUSD=X"]), 1)
+
+    def test_a_partial_outage_over_real_stored_rates_is_flagged_not_withheld(self):
+        self._get(True, covered="2024-01-02")
+
+        self.assertIs(self.response["data_quality"]["fx_fallback"], True)
+        self.assertNotIn("unavailable_reason", self.response["data_quality"])
+        self.assertEqual(len(self.response["GBPUSD=X"]), 1)
+
+    def test_approximated_constants_are_withheld_with_a_reason(self):
+        self._get(True, covered=None)
+
+        self.assertEqual(self.response["GBPUSD=X"], {})
+        self.assertIs(self.response["data_quality"]["degraded"], True)
+        self.assertIn("unavailable_reason", self.response["data_quality"])
+
+    def test_a_store_ending_before_the_window_is_treated_as_approximated(self):
+        self._get(True, covered="2022-12-30")
+
+        self.assertEqual(self.response["GBPUSD=X"], {})
 
     def test_serving_the_fallback_rates_is_a_warning_that_says_they_are_estimates(self):
         record = self._get(True)

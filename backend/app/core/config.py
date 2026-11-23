@@ -1,10 +1,7 @@
 import os
 from typing import List, Optional
-try:
-    from pydantic_settings import BaseSettings, SettingsConfigDict
-except ImportError:
-    from pydantic import BaseModel as BaseSettings
-    SettingsConfigDict = dict
+# deliberately unguarded
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
