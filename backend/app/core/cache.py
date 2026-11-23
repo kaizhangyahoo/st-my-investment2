@@ -35,6 +35,10 @@ class TTLCache:
         with self._lock:
             self._store[key] = (val, time.time() + ttl_val)
 
+    def delete(self, key: Any) -> bool:
+        with self._lock:
+            return self._store.pop(key, None) is not None
+
     def clear(self) -> None:
         with self._lock:
             self._store.clear()
@@ -76,6 +80,20 @@ def ttl_cache(
             else:
                 record_cache_uncacheable(counter)
             return res
+
+        def clear(*c_args, **c_kwargs):
+            """Invalidate all cached entries for this function, or a specific call signature."""
+            if not c_args and not c_kwargs:
+                with cache._lock:
+                    keys = [k for k in cache._store if isinstance(k, tuple) and len(k) > 0 and k[0] == func.__name__]
+                    for k in keys:
+                        del cache._store[k]
+            else:
+                key = (func.__name__, str(c_args), str(sorted(c_kwargs.items())))
+                cache.delete(key)
+
+        wrapper.clear = clear
+        wrapper.invalidate = clear
         return wrapper
     return decorator
 

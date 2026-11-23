@@ -157,5 +157,49 @@ class TestGetDefault(TTLCacheCase):
         self.assertIsNone(cache.get("k", sentinel))
 
 
+class TestInvalidation(TTLCacheCase):
+    def test_delete_removes_single_key(self):
+        cache.set("k", "v")
+        self.assertTrue(cache.delete("k"))
+        self.assertFalse(cache.delete("k"))
+        self.assertIsNone(cache.get("k"))
+
+    def test_wrapper_clear_all_for_function(self):
+        inner = Counted(result="v")
+        cached = ttl_cache()(inner)
+        cached("arg1")
+        cached("arg2")
+        self.assertEqual(inner.calls, 2)
+
+        cached("arg1")
+        self.assertEqual(inner.calls, 2)
+
+        cached.clear()
+        cached("arg1")
+        self.assertEqual(inner.calls, 3)
+
+    def test_wrapper_clear_specific_signature(self):
+        inner = Counted(result="v")
+        cached = ttl_cache()(inner)
+        cached("arg1")
+        cached("arg2")
+        self.assertEqual(inner.calls, 2)
+
+        cached.clear("arg1")
+        cached("arg2")
+        self.assertEqual(inner.calls, 2)
+        cached("arg1")
+        self.assertEqual(inner.calls, 3)
+
+    def test_wrapper_invalidate_alias(self):
+        inner = Counted(result="v")
+        cached = ttl_cache()(inner)
+        cached()
+        self.assertEqual(inner.calls, 1)
+        cached.invalidate()
+        cached()
+        self.assertEqual(inner.calls, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

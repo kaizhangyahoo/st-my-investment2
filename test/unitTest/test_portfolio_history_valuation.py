@@ -58,6 +58,9 @@ class HistoryCase(unittest.TestCase):
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(settings, "TICKER_MAP_FILE", self.map_path))
+        from backend.app.services.ticker_service import load_ticker_mappings
+        load_ticker_mappings.clear()
+        self.addCleanup(load_ticker_mappings.clear)
         stack.enter_context(patch.object(settings, "PORTFOLIO_VALUES_FILE", self.values_path))
         self.assertEqual(settings.PORTFOLIO_VALUES_FILE, self.values_path)
 

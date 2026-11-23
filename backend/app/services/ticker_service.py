@@ -3,7 +3,17 @@ import json
 from collections import Counter
 from typing import Any, Dict, List, Optional
 from backend.app.core.config import settings
+from backend.app.core.cache import ttl_cache
 
+# Cached for 300 seconds (5 minutes) so that redundant file I/O on hot paths
+# (e.g. GET /api/v1/trades/summary) is avoided, while manual edits made directly
+# to company_name_to_ticker.json on disk become visible within 5 minutes without
+# requiring a process restart. Writes through save_ticker_mappings() invalidate
+# the cache immediately.
+TICKER_MAP_TTL = 300
+
+
+@ttl_cache(ttl=TICKER_MAP_TTL, name="ticker_map")
 def load_ticker_mappings() -> Dict[str, str]:
     filepath = settings.TICKER_MAP_FILE
     if os.path.exists(filepath):
@@ -88,7 +98,7 @@ def save_ticker_mappings(mappings: Dict[str, str], replace: bool = False) -> Dic
     """
     filepath = settings.TICKER_MAP_FILE
     clean = normalise_mappings(mappings)
-    current = {} if replace else load_ticker_mappings()
+    current = {} if replace else dict(load_ticker_mappings())
     existing = {_fold(name): name for name in current}
     for name in clean:
         clash = existing.get(_fold(name))
@@ -97,6 +107,7 @@ def save_ticker_mappings(mappings: Dict[str, str], replace: bool = False) -> Dic
     current.update(clean)
     with open(filepath, "w") as f:
         json.dump(current, f, indent=2)
+    load_ticker_mappings.clear()
     return current
 
 def resolve_tickers_sec(market_names: List[str]) -> Dict[str, Optional[str]]:

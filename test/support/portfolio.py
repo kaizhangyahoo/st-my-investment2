@@ -118,6 +118,10 @@ class TempMappingCase(unittest.TestCase):
     MAPPINGS = {"Apple Inc": "AAPL"}
 
     def setUp(self):
+        from backend.app.services.ticker_service import load_ticker_mappings
+
+        load_ticker_mappings.clear()
+        self.addCleanup(load_ticker_mappings.clear)
         fd, self.map_path = tempfile.mkstemp(prefix="verify_ticker_map_", suffix=".json")
         with os.fdopen(fd, "w") as f:
             json.dump(self.MAPPINGS, f)

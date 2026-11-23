@@ -161,6 +161,9 @@ class TestHistoryComputeEndpoint(unittest.TestCase):
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(settings, "TICKER_MAP_FILE", map_path))
+        from backend.app.services.ticker_service import load_ticker_mappings
+        load_ticker_mappings.clear()
+        self.addCleanup(load_ticker_mappings.clear)
         stack.enter_context(patch.object(settings, "PORTFOLIO_VALUES_FILE", self.values_path))
         stack.enter_context(patch.object(history_service, "get_price_history", _prices))
         stack.enter_context(patch.object(history_service, "get_historical_fx", _fx))

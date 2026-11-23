@@ -68,6 +68,9 @@ def _temp_mapping(case, mappings):
     path = os.path.join(tempfile.mkdtemp(prefix="verify_spans_map_"), "ticker_map.json")
     with open(path, "w") as f:
         json.dump(mappings, f)
+    from backend.app.services.ticker_service import load_ticker_mappings
+    load_ticker_mappings.clear()
+    case.addCleanup(load_ticker_mappings.clear)
     patcher = patch.object(settings, "TICKER_MAP_FILE", path)
     patcher.start()
     case.addCleanup(patcher.stop)

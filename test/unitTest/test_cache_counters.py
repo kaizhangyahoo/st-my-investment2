@@ -10,6 +10,7 @@ alternative is a process-global tally, which is the per-request trap this avoids
 instrumented cache has to sit inside a guaranteed span. The tests that pin that pairing are the
 T212 and statement ones -- nothing else catches a span being trimmed away later.
 """
+import json
 import os
 import tempfile
 import unittest
@@ -394,6 +395,53 @@ class TestStatementCounters(_CacheCase):
         assert_attributes_are_safe(
             self, self.spans(), forbidden=(self.tmpdir, STATEMENT_NAME, "QX2B3")
         )
+
+
+@unittest.skipIf(not TRACING_AVAILABLE, "fastapi / opentelemetry sdk unavailable")
+class TestTickerMapCounters(_CacheCase):
+    """The ticker map is read during portfolio resolution. `portfolio.resolve_tickers`
+    is the enclosing span that carries `cache.ticker_map.*` (KAN-68)."""
+
+    def setUp(self):
+        from backend.app.core.config import settings
+        from backend.app.services.ticker_service import load_ticker_mappings
+
+        self._isolate_cache()
+        load_ticker_mappings.clear()
+        self.addCleanup(load_ticker_mappings.clear)
+
+        self.tmpdir = tempfile.mkdtemp(prefix="verify_ticker_map_counters_")
+        self.map_file = os.path.join(self.tmpdir, "company_name_to_ticker.json")
+        with open(self.map_file, "w") as f:
+            json.dump({"Apple Inc": "AAPL"}, f)
+
+        patcher = patch.object(settings, "TICKER_MAP_FILE", self.map_file)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        self._build(self._handler, path="/api/ticker_map")
+
+    def _handler(self):
+        from test.support.portfolio import run_engine, trade_df
+
+        return run_engine(trade_df())
+
+    def test_cold_and_warm_resolution_spans_report_ticker_map_counts(self):
+        self.assertEqual(self.client.get(self.path).status_code, 200)
+        cold = self.named("portfolio.resolve_tickers").attributes
+        # Cold: first load is a miss, second load inside find_unresolved_symbols is a hit
+        self.assertEqual(cold["cache.ticker_map.misses"], 1)
+        self.assertEqual(cold["cache.ticker_map.hits"], 1)
+        self.assertIs(cold["cache.ticker_map.hit"], False)
+
+        self.exporter.clear()
+        self.assertEqual(self.client.get(self.path).status_code, 200)
+        warm = self.named("portfolio.resolve_tickers").attributes
+        self.assertEqual(warm["cache.ticker_map.misses"], 0)
+        self.assertEqual(warm["cache.ticker_map.hits"], 2)
+        self.assertIs(warm["cache.ticker_map.hit"], True)
+
+        assert_attributes_are_safe(self, self.spans())
 
 
 class TestCountersWhileTracingIsOff(unittest.TestCase):
