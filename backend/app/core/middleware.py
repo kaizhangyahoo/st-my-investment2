@@ -133,6 +133,9 @@ class RequestContextMiddleware:
             # safety net rather than a licence to log one.
             "requestUrl": scope.get("path", ""),
             "status": status,
+            # A duration string, because that is the only form Cloud Logging parses here.
+            # The numeric sibling a latency panel needs goes in `extra` below, outside this
+            # dict -- these field names are Cloud Logging's and will not take an extra one.
             "latency": f"{elapsed:.3f}s",
             "userAgent": headers.get("user-agent", ""),
             "remoteIp": client[0] if client else "",
@@ -151,5 +154,5 @@ class RequestContextMiddleware:
             status,
             elapsed * 1000,
             f" ({detail})" if detail else "",
-            extra={"http_request": http_request},
+            extra={"http_request": http_request, "duration_ms": round(elapsed * 1000, 1)},
         )

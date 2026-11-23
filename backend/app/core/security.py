@@ -1,9 +1,12 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from backend.app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -16,7 +19,15 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 def decode_access_token(token: str) -> Optional[dict]:
     try:
         return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
-    except Exception:
+    except Exception as e:
+        # The class is the whole signal, and it is the one thing this used to throw away:
+        # ExpiredSignatureError is a user whose tab was open too long, InvalidSignatureError is
+        # someone forging a token, and collapsing both into `return None` made them
+        # indistinguishable. Neither the message nor the token is logged -- the message adds
+        # nothing a class name does not, and the token is a credential.
+        logger.warning(
+            "Bearer token rejected (%s); the caller receives a 401", type(e).__name__
+        )
         return None
 
 def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme)) -> dict:

@@ -43,7 +43,14 @@ def reset_request(tokens: _Tokens) -> None:
 
 
 def parse_cloud_trace(header: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    """Parse `X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1`, tolerating anything malformed."""
+    """Parse `X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1`, tolerating anything malformed.
+
+    Google sends TRACE_ID as 32 hex digits but SPAN_ID as a *decimal* integer, while both W3C
+    and Cloud Logging's `spanId` want 16 lowercase hex digits. An id in the wrong base joins to
+    nothing, so the span half is converted rather than copied -- and anything that is not a
+    64-bit decimal is dropped, since the header is client-settable and a mis-shaped id is worse
+    than no id at all.
+    """
     if not header:
         return None, None
     value = header.split(";", 1)[0].strip()
@@ -54,7 +61,9 @@ def parse_cloud_trace(header: Optional[str]) -> Tuple[Optional[str], Optional[st
     span = span.strip()
     if not trace:
         return None, None
-    return trace, (span or None)
+    if not span.isdigit() or int(span) >= 2 ** 64:
+        return trace, None
+    return trace, format(int(span), "016x")
 
 
 class RequestContextFilter(logging.Filter):

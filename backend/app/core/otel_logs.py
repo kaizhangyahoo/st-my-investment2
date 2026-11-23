@@ -110,7 +110,12 @@ def build_otel_handler(settings) -> Optional[logging.Handler]:
     protocol = resolve_protocol(settings.OTEL_EXPORTER_OTLP_PROTOCOL)
     headers = parse_kv(headers_raw)
 
-    if "grafana.net" in endpoint and not headers.get("Authorization"):
+    # Case-insensitively: `parse_kv` keeps the key exactly as .env spelled it, and HTTP header
+    # names are not case-sensitive, so `authorization=Basic ...` exports perfectly well while a
+    # literal "Authorization" lookup would still announce a 401 that never comes.
+    if "grafana.net" in endpoint and not any(
+        key.lower() == "authorization" and value for key, value in headers.items()
+    ):
         logging.getLogger(__name__).warning(
             "OTEL_EXPORTER_OTLP_ENDPOINT points to Grafana Cloud (%s), but "
             "OTEL_EXPORTER_OTLP_HEADERS does not contain an Authorization header. "

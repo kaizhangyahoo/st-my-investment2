@@ -36,8 +36,27 @@ _SEVERITY = {
 }
 
 
+def _redact_value(value: Any) -> Any:
+    """Redact a custom dimension, which is rarely a flat string.
+
+    `log_data_quality` hands in `failures`, a list of `{"ticker", "provider", "reason"}` whose
+    reason is `str(e)` on a `requests` error -- the whole URL, `apikey=` included. Redacting
+    only the message would publish that key on every provider outage.
+    """
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {k: _redact_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(v) for v in value]
+    return value
+
+
 def _custom_dimensions(record: logging.LogRecord) -> Dict[str, Any]:
-    return {k: v for k, v in record.__dict__.items() if k not in _RESERVED and not k.startswith("_")}
+    return {
+        k: _redact_value(v) for k, v in record.__dict__.items()
+        if k not in _RESERVED and not k.startswith("_")
+    }
 
 
 class JsonFormatter(logging.Formatter):
@@ -159,9 +178,17 @@ def configure_logging() -> None:
             # settings.OTEL_EXPORTER_OTLP_PROTOCOL,
             otel._pa_protocol, # type: ignore[attr-defined]
         )
+    elif settings.OTEL_EXPORTER_OTLP_ENDPOINT or settings.OTEL_EXPORTER_OTLP_HEADERS:
+        # Configured and still not exporting, which `build_otel_handler` has already explained
+        # in detail. Said again here because the startup block is the one place an operator
+        # reads to answer "is this shipping logs?", and until now that question had no answer
+        # in exactly the case where it matters: silence read identically to healthy.
+        startup_logger.warning(
+            "OTLP log export is configured but inactive; logs stay on stdout only. The "
+            "preceding line from the exporter setup says why."
+        )
     else:
-        if not (settings.OTEL_EXPORTER_OTLP_ENDPOINT or settings.OTEL_EXPORTER_OTLP_HEADERS):
-            startup_logger.info("OTLP log export is inactive (local stdout logging only)")
+        startup_logger.info("OTLP log export is inactive (local stdout logging only)")
 
     # The access line is re-emitted by our own middleware with latency and a request id, so
     # uvicorn's version would only duplicate it. Startup/shutdown errors are still wanted,

@@ -1,34 +1,14 @@
 """Keeps credentials out of log lines.
 
-Two layers, because headers are not the only leak path. `price_service` passes `apikey` and
-`api_token` as query parameters, and a `requests` exception repr embeds the full URL — so a
-header allowlist alone would still publish a provider key the moment a fetch fails.
+Two layers, because knowing the value is not always possible. The configured secrets are masked
+by literal match; anything shaped like `?apikey=...` is masked whether or not the value is one of
+ours. The second layer is what covers `price_service` passing `apikey` and `api_token` as query
+parameters, since a `requests` exception repr embeds the whole URL the moment a fetch fails.
 """
 import re
-from typing import Dict, Iterable, List, Mapping, Optional
+from typing import Iterable, List, Optional
 
 REDACTED = "[redacted]"
-
-# Read off a request only these. An allowlist means a sensitive header added later cannot
-# leak by default, which a denylist would not guarantee.
-SAFE_REQUEST_HEADERS = frozenset({
-    "user-agent",
-    "referer",
-    "content-type",
-    "content-length",
-    "x-request-id",
-    "x-cloud-trace-context",
-})
-
-SENSITIVE_HEADERS = frozenset({
-    "authorization",
-    "proxy-authorization",
-    "cookie",
-    "set-cookie",
-    "x-api-key",
-    "x-t212-key",
-    "x-t212-secret",
-})
 
 # Catches provider keys in a URL even when the value itself is unknown to us.
 _QUERY_SECRET_RE = re.compile(
@@ -88,13 +68,3 @@ def redact(text: Optional[str]) -> Optional[str]:
         if literal in text:
             text = text.replace(literal, REDACTED)
     return _QUERY_SECRET_RE.sub(r"\1" + REDACTED, text)
-
-
-def safe_headers(headers: Mapping[str, str]) -> Dict[str, str]:
-    """Project request headers down to the allowlist."""
-    return {k: v for k, v in headers.items() if k.lower() in SAFE_REQUEST_HEADERS}
-
-
-def redact_headers(headers: Mapping[str, str]) -> Dict[str, str]:
-    """Mask known-sensitive headers but keep the rest. For explicit debugging use."""
-    return {k: (REDACTED if k.lower() in SENSITIVE_HEADERS else v) for k, v in headers.items()}
