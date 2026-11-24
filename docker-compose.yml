@@ -1,0 +1,61 @@
+# Phase 0 / Stage 1: internal server (RPi4, arm64) - gateway + monolith backend.
+# Usage:
+#   cp backend/.env.example backend/.env   # fill in keys (gitignored)
+#   docker compose up -d --build
+#   open http://<server>:${GATEWAY_PORT:-8080}
+# Optional IG news job:  docker compose --profile jobs run --rm ig-news
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    image: portfolio-backend:local
+    env_file:
+      - backend/.env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-internal}
+      LOG_FORMAT: json
+      # Shared JSON state: the whole directory is mounted (atomic temp+rename needs it).
+      TICKER_MAP_FILE: /data/company_name_to_ticker.json
+      PORTFOLIO_VALUES_FILE: /data/user_portfolio_values.json
+      FX_HISTORY_FILE: /data/fx_history.json
+      STATEMENTS_DIR: /statements
+    volumes:
+      - ${DATA_DIR:-.}:/data
+      - ${STATEMENTS_DIR:-./statements}:/statements:ro
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: frontend
+    image: portfolio-gateway:local
+    ports:
+      - "${GATEWAY_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ig-news:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: ig/Dockerfile.news
+    environment:
+      IG_USERNAME: ${IG_USERNAME:-}
+      IG_PASSWORD: ${IG_PASSWORD:-}
+    volumes:
+      - ${NEWS_OUTPUT_DIR:-./news_output}:/app/news_output
+    command: >
+      --headless
+      --username ${IG_USERNAME:-}
+      --password ${IG_PASSWORD:-}
+      --output /app/news_output
+      --max-news-items ${IG_MAX_NEWS_ITEMS:-5}
+    restart: "no"

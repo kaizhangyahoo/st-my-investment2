@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     # Unlike the two above, this one is pure cache: it is rebuilt from the provider on demand and
     # is not shared with the legacy app, so it is gitignored rather than tracked.
     FX_HISTORY_FILE: str = os.path.join(REPO_ROOT, "fx_history.json")
+    # Folder scanned for the latest IG Trade*/Transaction*.csv statements when nothing is uploaded.
+    STATEMENTS_DIR: str = "~/Downloads"
 
 settings = Settings()
 

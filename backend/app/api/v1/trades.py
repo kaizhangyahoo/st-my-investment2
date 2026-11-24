@@ -12,6 +12,7 @@ from backend.app.services.portfolio_engine import calculate_positions_from_df, c
 from backend.app.services.realised_pnl import CORPORATE_ACTION
 from backend.app.services.ticker_service import find_unresolved_symbols, load_ticker_mappings, resolve_ticker
 from backend.app.schemas.portfolio import PortfolioSummary, CashflowItem, TradeActivityItem
+from backend.app.core.config import settings
 from backend.app.core.security import get_current_user
 from backend.app.core.diagnostics import log_data_quality
 from backend.app.core.tracing import record_cache_hit, record_cache_miss, span
@@ -49,7 +50,7 @@ def find_latest_download_files() -> Tuple[Optional[str], Optional[str]]:
     # The directory and the filenames stay off the span: the path contains the OS username and
     # the basename contains the broker account id.
     with span("trades.scan_downloads") as active:
-        downloads_dir = os.path.expanduser('~/Downloads')
+        downloads_dir = os.path.expanduser(settings.STATEMENTS_DIR)
         if not os.path.isdir(downloads_dir):
             active.set_attribute("scan.candidates", 0)
             return None, None
