@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from backend.app.core.config import settings
+from backend.app.core.request_context import request_cache
 from backend.app.core.tracing import span
 from backend.app.services import fx_store
 from backend.app.services.market_service import get_historical_fx, get_price_history
@@ -37,6 +38,9 @@ from backend.app.services.ticker_service import load_ticker_mappings, resolve_ti
 logger = logging.getLogger(__name__)
 
 KEY_PREFIX = "ig:"
+
+# Slot in the per-request scratch store holding this request's parsed copy of the values file.
+_VALUES_SLOT = "history.portfolio_values"
 
 # Yahoo quote currency -> how to turn a close into GBP. "GBp" is pence, not a separate currency.
 _FX_PAIR = {"USD": "GBPUSD=X", "EUR": "GBPEUR=X"}
@@ -218,11 +222,35 @@ def _fx_unbacked(
     return holds_fx & (holdings.index > real_through)
 
 
-def _read_cache_file() -> Dict[str, Dict[str, float]]:
-    # Spanned because one request reaches here several times -- the compute path reads it, and so
-    # does every helper that answers a question about the stored keys. Seeing the repeats is the
-    # point; the path itself is not recorded, since it is a log concern and a span attribute is a
-    # different retention domain.
+def _read_cache_file(*, fresh: bool = False) -> Dict[str, Dict[str, float]]:
+    """The parsed values file, read from disk once per request and shared from there.
+
+    One compute request used to read and parse it four times (KAN-69): the pending-date filter,
+    the merge, the response's points and the route's account list. The scope is the *request*
+    and deliberately not a TTL -- the legacy Streamlit app writes this same path, so a copy
+    outliving the request would widen the lost-update window the atomic read-merge-write exists
+    to close. Outside a request there is no scope and every call reads, as before.
+
+    `fresh` reads from disk and does not consult the request's copy. `_merge_and_write` needs it:
+    the merge has to see whatever the legacy app committed while this request was off fetching
+    prices, or it would write those keys back out of existence.
+    """
+    store = request_cache()
+    if store is not None and not fresh:
+        cached = store.get(_VALUES_SLOT)
+        if cached is not None:
+            return cached
+    data = _read_values_from_disk()
+    if store is not None and not fresh:
+        store[_VALUES_SLOT] = data
+    return data
+
+
+def _read_values_from_disk() -> Dict[str, Dict[str, float]]:
+    # Spanned on the read itself, so the span count is the count of times the file was actually
+    # opened -- that is what made the four repeats visible in the first place, and it is what
+    # `test_compute_path_spans.py` pins now that there are fewer. The path is not recorded: it is
+    # a log concern, and a span attribute is a different retention domain.
     with span("history.cache_read") as active:
         path = settings.PORTFOLIO_VALUES_FILE
         if not os.path.exists(path):
@@ -261,7 +289,9 @@ def _merge_and_write(key: str, new_values: Dict[str, float], replace: bool = Fal
     # line, not on a span.
     with span("history.cache_write", **attributes) as active:
         path = settings.PORTFOLIO_VALUES_FILE
-        data = _read_cache_file()
+        # Straight to disk, never this request's copy: the copy was taken before the price
+        # fetches, and a legacy write landing in that window would be merged away.
+        data = _read_cache_file(fresh=True)
         if replace:
             data[key] = {}
         data.setdefault(key, {}).update(new_values)
@@ -271,6 +301,12 @@ def _merge_and_write(key: str, new_values: Dict[str, float], replace: bool = Fal
             with os.fdopen(fd, "w") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp, path)
+            # The file now holds exactly `data`, so the rest of the request -- the response's
+            # points, the route's account list -- needs no further read. Seeded only on success:
+            # a failed write persisted nothing, and a later read has to fall back to the file.
+            store = request_cache()
+            if store is not None:
+                store[_VALUES_SLOT] = data
         except OSError as e:
             active.set_attribute("cache.write_failed", True)
             logger.error(

@@ -206,13 +206,27 @@ class TestComputeRouteTrace(TracedApp):
         self.assertEqual(frame.attributes["price.tickers"], 2)
         self.assertEqual(frame.attributes["price.unpriced"], 0)
 
-    def test_the_shared_values_file_is_read_four_times_in_one_request(self):
-        # Pinned rather than merely tolerated: the compute reads it to filter pending dates, the
-        # write re-reads it to merge, the response re-reads it for the points, and the route
-        # re-reads it for the account list. That is the instrumentation doing its job, and the
-        # repetition is worth a caching ticket of its own.
+    def test_the_shared_values_file_is_read_twice_in_one_computing_request(self):
+        """Was four (KAN-69): the pending-date filter, the merge, the response's points and the
+        route's account list each opened the file. Three of those now share the request's copy.
+
+        Two and not one, for a reason worth pinning rather than tolerating: `_merge_and_write`
+        goes back to disk on purpose. Its copy would otherwise date from before the price
+        fetches, and a legacy Streamlit write landing in that window would be merged out of
+        existence -- the lost update the atomic replace exists to prevent.
+        """
         self._compute()
-        self.assertEqual(len(self.all_named("history.cache_read")), 4)
+        self.assertEqual(len(self.all_named("history.cache_read")), 2)
+
+    def test_a_request_that_computes_nothing_reads_the_shared_values_file_once(self):
+        """With every date already stored there is no merge, so the one remaining read is the
+        pending-date filter and the request's copy answers everything after it."""
+        self._compute()
+        self.exporter.clear()
+        self._compute()
+
+        self.assertNotIn("history.cache_write", self.names())
+        self.assertEqual(len(self.all_named("history.cache_read")), 1)
 
     def test_instrumentation_does_not_change_what_the_providers_are_asked_for(self):
         """The quota constraint, asserted directly: EODHD serves ~20 requests a day and one

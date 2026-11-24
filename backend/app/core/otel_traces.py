@@ -9,6 +9,7 @@ import logging
 from typing import Optional
 
 from backend.app.core.otel_logs import parse_kv
+from backend.app.core.otel_metrics import build_meter_provider
 from backend.app.core.redaction import redact
 
 _provider = None
@@ -89,18 +90,21 @@ def build_tracer_provider(settings, exporter=None):
     return _provider
 
 
-def instrument_app(app, settings, exporter=None) -> Optional[object]:
+def instrument_app(app, settings, exporter=None, metric_reader=None) -> Optional[object]:
     """Traces every inbound request and every outbound `requests` call (Yahoo, TwelveData,
-    EODHD, Firebase...). Returns the provider, or None when tracing is off."""
+    EODHD, Firebase...), and records their HTTP duration metrics. Returns the tracer provider,
+    or None when tracing is off."""
     provider = build_tracer_provider(settings, exporter)
     if provider is None:
         return None
+    meter_provider = build_meter_provider(settings, metric_reader)
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     from opentelemetry.instrumentation.requests import RequestsInstrumentor
 
     FastAPIInstrumentor.instrument_app(
         app,
         tracer_provider=provider,
+        meter_provider=meter_provider,
         excluded_urls=EXCLUDED_URLS,
         server_request_hook=redact_span_url,
         # Without this each request also emits `http send` and `http receive` children: three
@@ -110,7 +114,9 @@ def instrument_app(app, settings, exporter=None) -> Optional[object]:
     requests_instrumentor = RequestsInstrumentor()
     if requests_instrumentor.is_instrumented_by_opentelemetry:
         requests_instrumentor.uninstrument()
-    requests_instrumentor.instrument(tracer_provider=provider, request_hook=redact_span_url)
+    requests_instrumentor.instrument(
+        tracer_provider=provider, meter_provider=meter_provider, request_hook=redact_span_url
+    )
 
     # Logs and traces share one switch, so configure_logging's "log export enabled" line would
     # otherwise be the only evidence either is live -- and it still prints when the trace
