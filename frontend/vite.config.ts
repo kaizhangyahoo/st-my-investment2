@@ -16,6 +16,12 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      // Local collector, if running; otherwise span export fails silently.
+      '/otlp': {
+        target: 'http://localhost:4318',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/otlp/, ''),
+      },
     },
   },
 });

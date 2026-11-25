@@ -31,6 +31,18 @@ services:
       - "8000"
     restart: unless-stopped
 
+  # Browser span relay: holds the vendor credentials so the browser never sees them.
+  otel-collector:
+    image: otel/opentelemetry-collector:0.115.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    env_file:
+      - backend/.env
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    expose:
+      - "4318"
+    restart: unless-stopped
+
   gateway:
     build:
       context: frontend
@@ -40,6 +52,8 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     restart: unless-stopped
 
   ig-news:

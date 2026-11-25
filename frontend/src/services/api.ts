@@ -1,4 +1,5 @@
-import axios from 'axios';
+import axios, { type InternalAxiosRequestConfig } from 'axios';
+import type { Span } from '@opentelemetry/api';
 import {
   BenchmarkResponse,
   CashflowItem,
@@ -9,7 +10,12 @@ import {
   UploadResult,
   UserProfile,
 } from '../types';
-import { logger, newTraceparent } from './logger';
+import { logger } from './logger';
+import { endRequestSpan, startRequestSpan } from './tracing';
+
+const spans = new WeakMap<InternalAxiosRequestConfig, Span>();
+const requestPath = (config?: InternalAxiosRequestConfig) =>
+  `${config?.baseURL ?? ''}${config?.url ?? ''}`.split('?')[0];
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -25,7 +31,9 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
-  config.headers.traceparent = newTraceparent();
+  const { span, headers } = startRequestSpan((config.method ?? 'get').toUpperCase(), requestPath(config));
+  Object.entries(headers).forEach(([k, v]) => config.headers.set(k, v));
+  spans.set(config, span);
   return config;
 });
 
@@ -34,15 +42,21 @@ api.interceptors.request.use((config) => {
 // entry links to its own Tempo span. Path only: params can carry tickers or keys, and no other
 // header is read (the Trading 212 routes send credentials in them).
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const span = spans.get(response.config);
+    if (span) endRequestSpan(span, response.status);
+    return response;
+  },
   (error) => {
     const status: number | undefined = error?.response?.status;
     const method = (error?.config?.method ?? 'get').toUpperCase();
-    const path = `${error?.config?.baseURL ?? ''}${error?.config?.url ?? ''}`.split('?')[0];
+    const path = requestPath(error?.config);
     const requestId: string | undefined = error?.response?.headers?.['x-request-id'];
     // traceparent is `00-<trace id>-<span id>-<flags>`.
     const traceId: string | undefined = (error?.config?.headers?.traceparent as string | undefined)?.split('-')[1];
     const outcome = status ? `HTTP ${status}` : error?.code === 'ECONNABORTED' ? 'timeout' : 'network error';
+    const span = error?.config ? spans.get(error.config) : undefined;
+    if (span) endRequestSpan(span, status, status ? undefined : outcome);
     const message = `${method} ${path} failed: ${outcome}`;
     const extra = { request_id: requestId, trace_id: traceId };
     if (!status || status >= 500) logger.error(message, undefined, extra);

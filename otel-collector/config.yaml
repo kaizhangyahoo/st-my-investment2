@@ -1,0 +1,28 @@
+# Receives browser spans (via the gateway's /otlp/v1/traces route) and forwards them to the
+# vendor with server-side credentials. Migrating to CloudWatch / GCP = swap the exporter here.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        max_request_body_size: 262144 # 256 KiB, matches the nginx cap
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 100
+    spike_limit_mib: 25
+  batch: {}
+
+exporters:
+  otlphttp/grafana:
+    endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
+    headers:
+      Authorization: ${env:GRAFANA_OTLP_AUTHORIZATION}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/grafana]
