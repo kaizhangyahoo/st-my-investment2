@@ -27,11 +27,16 @@ services:
     volumes:
       - ${DATA_DIR:-.}:/data
       - ${STATEMENTS_DIR:-./statements}:/statements:ro
+    depends_on:
+      otel-collector:
+        condition: service_started
+        required: false
     expose:
       - "8000"
     restart: unless-stopped
 
-  # Browser span relay: holds the vendor credentials so the browser never sees them.
+  # Telemetry relay for browser spans and backend traces/logs/metrics. The only holder of the
+  # Grafana credential (GRAFANA_OTLP_ENDPOINT / GRAFANA_OTLP_AUTHORIZATION in backend/.env).
   otel-collector:
     image: otel/opentelemetry-collector:0.115.1
     command: ["--config=/etc/otelcol/config.yaml"]

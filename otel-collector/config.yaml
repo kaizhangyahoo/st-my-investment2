@@ -16,13 +16,21 @@ processors:
 
 exporters:
   otlphttp/grafana:
-    endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
+    endpoint: ${env:GRAFANA_OTLP_ENDPOINT}
     headers:
       Authorization: ${env:GRAFANA_OTLP_AUTHORIZATION}
 
 service:
   pipelines:
     traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/grafana]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/grafana]
+    metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [otlphttp/grafana]
