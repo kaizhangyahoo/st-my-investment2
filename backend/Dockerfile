@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY backend/requirements.txt backend/requirements.txt
-RUN pip install -r backend/requirements.txt firebase-admin
+RUN pip install -r backend/requirements.txt
 
 COPY shared_service/ shared_service/
 COPY backend/ backend/
