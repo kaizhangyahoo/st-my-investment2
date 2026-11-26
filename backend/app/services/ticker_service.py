@@ -1,9 +1,10 @@
-import os
-import json
 from collections import Counter
 from typing import Any, Dict, List, Optional
-from backend.app.core.config import settings
+
+from backend.app.stores.ticker_map import TickerMapStore
 from backend.app.core.cache import ttl_cache
+
+_store = TickerMapStore()
 
 # Cached for 300 seconds (5 minutes) so that redundant file I/O on hot paths
 # (e.g. GET /api/v1/trades/summary) is avoided, while manual edits made directly
@@ -13,16 +14,13 @@ from backend.app.core.cache import ttl_cache
 TICKER_MAP_TTL = 300
 
 
+# The cache stays on this module-level function rather than moving onto the store: `ttl_cache`
+# keys on the function name and the stringified arguments, so a bound method would put `self` --
+# and its address-bearing default repr -- in the key and miss on every call. `name` is also the
+# prefix of the `cache.ticker_map.*` span attributes, so it must not drift.
 @ttl_cache(ttl=TICKER_MAP_TTL, name="ticker_map")
 def load_ticker_mappings() -> Dict[str, str]:
-    filepath = settings.TICKER_MAP_FILE
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, "r") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+    return _store.read()
 
 
 def resolve_ticker(raw_name: str, mappings: Dict[str, str]) -> Optional[str]:
@@ -96,7 +94,6 @@ def save_ticker_mappings(mappings: Dict[str, str], replace: bool = False) -> Dic
     Merge `mappings` into the stored map, or with `replace=True` make it the whole
     map -- the only way a delete or rename reaches the file.
     """
-    filepath = settings.TICKER_MAP_FILE
     clean = normalise_mappings(mappings)
     current = {} if replace else dict(load_ticker_mappings())
     existing = {_fold(name): name for name in current}
@@ -105,8 +102,7 @@ def save_ticker_mappings(mappings: Dict[str, str], replace: bool = False) -> Dic
         if clash is not None and clash != name:
             raise ValueError(f'"{name}" duplicates existing mapping "{clash}"')
     current.update(clean)
-    with open(filepath, "w") as f:
-        json.dump(current, f, indent=2)
+    _store.write(current)
     load_ticker_mappings.clear()
     return current
 

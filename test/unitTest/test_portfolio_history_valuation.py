@@ -16,6 +16,8 @@ import pandas as pd
 from backend.app.core import request_context
 from backend.app.core.config import settings
 from backend.app.services import history_service
+from backend.app.stores import portfolio_values
+from backend.app.stores.portfolio_values import PortfolioValuesStore
 from test.support.portfolio import temp_fx_store
 
 DATES = ["2024-01-02", "2024-01-03", "2024-01-04"]
@@ -313,15 +315,19 @@ class TestTheRequestsCopyOfTheValuesFile(HistoryCase):
         self.addCleanup(request_context.reset_request, tokens)
 
     def count_reads(self):
-        """Counts reads that actually open the file -- the same thing the spans count."""
+        """Counts reads that actually open the file -- the same thing the spans count.
+
+        Patched on the store class rather than on `history_service`, because the disk read moved
+        into `PortfolioValuesStore` in P1 and the module-level functions now delegate to it.
+        """
         reads = []
-        real = history_service._read_values_from_disk
+        real = PortfolioValuesStore.read_from_disk
 
-        def counting():
+        def counting(store_self):
             reads.append(1)
-            return real()
+            return real(store_self)
 
-        patcher = patch.object(history_service, "_read_values_from_disk", counting)
+        patcher = patch.object(PortfolioValuesStore, "read_from_disk", counting)
         patcher.start()
         self.addCleanup(patcher.stop)
         return reads
@@ -386,8 +392,10 @@ class TestTheRequestsCopyOfTheValuesFile(HistoryCase):
         self.in_request()
         history_service.stored_accounts()
 
+        # The store is what failed to persist, so it is the store's logger that reports it; the
+        # write moved out of `history_service` in P1.
         with patch("os.replace", side_effect=OSError("disk full")):
-            with self.assertLogs(history_service.logger, "ERROR"):
+            with self.assertLogs(portfolio_values.logger, "ERROR"):
                 history_service._merge_and_write("ig:u1", {"2024-01-02": 500.0})
 
         self.assertEqual(history_service.read_cached_series("ig:u1"), [])

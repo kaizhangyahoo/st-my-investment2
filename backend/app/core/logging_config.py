@@ -14,7 +14,6 @@ import sys
 import time
 from typing import Any, Dict, Optional
 
-from backend.app.core.config import settings
 from backend.app.core.otel_logs import build_otel_handler
 from backend.app.core.redaction import collect_secret_literals, redact, set_secret_literals
 from backend.app.core.request_context import RequestContextFilter
@@ -130,7 +129,7 @@ class TextFormatter(logging.Formatter):
         return line
 
 
-def _use_json() -> bool:
+def _use_json(settings) -> bool:
     configured = (settings.LOG_FORMAT or "auto").strip().lower()
     if configured == "json":
         return True
@@ -141,11 +140,14 @@ def _use_json() -> bool:
     return os.environ.get("K_SERVICE") is not None
 
 
-def configure_logging() -> None:
+def configure_logging(settings) -> None:
     """Install one stdout handler on the root logger. Safe to call repeatedly.
 
     basicConfig is deliberately avoided: it is a no-op once uvicorn has installed its own
     handlers, which it does before application import under some run modes.
+
+    `settings` is passed in rather than imported so each service configures logging from its
+    own configuration object; this module must stay free of any one service's config.
     """
     set_secret_literals(collect_secret_literals(settings))
 
@@ -158,7 +160,9 @@ def configure_logging() -> None:
 
     handler = logging.StreamHandler(sys.stdout)
     handler._pa_owned = True  # type: ignore[attr-defined]
-    handler.setFormatter(JsonFormatter(settings.GCP_PROJECT_ID) if _use_json() else TextFormatter())
+    handler.setFormatter(
+        JsonFormatter(settings.GCP_PROJECT_ID) if _use_json(settings) else TextFormatter()
+    )
     handler.addFilter(RequestContextFilter())
 
     level = getattr(logging, (settings.LOG_LEVEL or "INFO").strip().upper(), logging.INFO)

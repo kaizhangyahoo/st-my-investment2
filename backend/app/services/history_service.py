@@ -20,16 +20,12 @@ merge before an atomic replace so a concurrent legacy run loses at most its own 
 not the whole file.
 """
 import logging
-import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from backend.app.core.config import settings
-from backend.app.core.request_context import request_cache
+from backend.app.stores.portfolio_values import KEY_PREFIX, PortfolioValuesStore, portfolio_key
 from backend.app.core.tracing import span
 from backend.app.services import fx_store
 from backend.app.services.market_service import get_historical_fx, get_price_history
@@ -37,17 +33,10 @@ from backend.app.services.ticker_service import load_ticker_mappings, resolve_ti
 
 logger = logging.getLogger(__name__)
 
-KEY_PREFIX = "ig:"
-
-# Slot in the per-request scratch store holding this request's parsed copy of the values file.
-_VALUES_SLOT = "history.portfolio_values"
+_values = PortfolioValuesStore()
 
 # Yahoo quote currency -> how to turn a close into GBP. "GBp" is pence, not a separate currency.
 _FX_PAIR = {"USD": "GBPUSD=X", "EUR": "GBPEUR=X"}
-
-
-def portfolio_key(user_id: str) -> str:
-    return f"{KEY_PREFIX}{user_id}"
 
 
 def _normalise_trades(df_trade_history: pd.DataFrame) -> pd.DataFrame:
@@ -222,127 +211,30 @@ def _fx_unbacked(
     return holds_fx & (holdings.index > real_through)
 
 
+# The values file itself lives behind `PortfolioValuesStore` from P1 on. These names stay
+# because the routes and `compute_history` below already call them; P2 leaves them here, since
+# portfolio-api is the service that keeps owning this file.
 def _read_cache_file(*, fresh: bool = False) -> Dict[str, Dict[str, float]]:
-    """The parsed values file, read from disk once per request and shared from there.
-
-    One compute request used to read and parse it four times (KAN-69): the pending-date filter,
-    the merge, the response's points and the route's account list. The scope is the *request*
-    and deliberately not a TTL -- the legacy Streamlit app writes this same path, so a copy
-    outliving the request would widen the lost-update window the atomic read-merge-write exists
-    to close. Outside a request there is no scope and every call reads, as before.
-
-    `fresh` reads from disk and does not consult the request's copy. `_merge_and_write` needs it:
-    the merge has to see whatever the legacy app committed while this request was off fetching
-    prices, or it would write those keys back out of existence.
-    """
-    store = request_cache()
-    if store is not None and not fresh:
-        cached = store.get(_VALUES_SLOT)
-        if cached is not None:
-            return cached
-    data = _read_values_from_disk()
-    if store is not None and not fresh:
-        store[_VALUES_SLOT] = data
-    return data
-
-
-def _read_values_from_disk() -> Dict[str, Dict[str, float]]:
-    # Spanned on the read itself, so the span count is the count of times the file was actually
-    # opened -- that is what made the four repeats visible in the first place, and it is what
-    # `test_compute_path_spans.py` pins now that there are fewer. The path is not recorded: it is
-    # a log concern, and a span attribute is a different retention domain.
-    with span("history.cache_read") as active:
-        path = settings.PORTFOLIO_VALUES_FILE
-        if not os.path.exists(path):
-            active.set_attribute("cache.accounts", 0)
-            active.set_attribute("cache.bytes", 0)
-            return {}
-        try:
-            with open(path, "r") as f:
-                data = json.load(f)
-        except (OSError, ValueError) as e:
-            logger.warning(
-                "Could not read %s: %s. Treating the history cache as empty, so the whole "
-                "series recomputes from scratch.",
-                path,
-                e,
-            )
-            active.set_attribute("cache.accounts", 0)
-            active.set_attribute("cache.read_failed", True)
-            return {}
-        data = data if isinstance(data, dict) else {}
-        active.set_attribute("cache.accounts", len(data))
-        active.set_attribute("cache.bytes", os.path.getsize(path))
-        return data
+    return _values.read(fresh=fresh)
 
 
 def _merge_and_write(key: str, new_values: Dict[str, float], replace: bool = False) -> None:
-    """Re-read, merge only `key`, then atomically replace, so a concurrent writer keeps its keys.
-
-    `replace` discards the key's existing dates first, so a forced recompute cannot leave behind
-    a stale value for a date that has since become unvaluable.
-    """
-    if not new_values and not replace:
-        return
-    attributes = {"cache.days_written": len(new_values), "cache.replace": replace}
-    # `key` is `ig:<firebase sub>`, so it stays out of the attributes: a user id belongs in a log
-    # line, not on a span.
-    with span("history.cache_write", **attributes) as active:
-        path = settings.PORTFOLIO_VALUES_FILE
-        # Straight to disk, never this request's copy: the copy was taken before the price
-        # fetches, and a legacy write landing in that window would be merged away.
-        data = _read_cache_file(fresh=True)
-        if replace:
-            data[key] = {}
-        data.setdefault(key, {}).update(new_values)
-        directory = os.path.dirname(path) or "."
-        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".portfolio_values_", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp, path)
-            # The file now holds exactly `data`, so the rest of the request -- the response's
-            # points, the route's account list -- needs no further read. Seeded only on success:
-            # a failed write persisted nothing, and a later read has to fall back to the file.
-            store = request_cache()
-            if store is not None:
-                store[_VALUES_SLOT] = data
-        except OSError as e:
-            active.set_attribute("cache.write_failed", True)
-            logger.error(
-                "Could not persist history cache to %s: %s. This run's computed values are lost "
-                "and the next load recomputes them.",
-                path,
-                e,
-            )
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+    _values.merge_key(key, new_values, replace=replace)
 
 
 def read_cached_series(key: str) -> List[Dict[str, Any]]:
     """The stored series for `key`, sorted by date. Used for the legacy T212 account keys too."""
-    account = _read_cache_file().get(key, {})
-    points = [{"date": d, "value": float(v)} for d, v in account.items() if v is not None]
-    points.sort(key=lambda p: p["date"])
-    return points
+    return _values.series(key)
 
 
 def stored_accounts() -> List[str]:
     """Every account key with at least one stored value."""
-    return sorted(k for k, v in _read_cache_file().items() if isinstance(v, dict) and v)
+    return _values.accounts()
 
 
 def default_account() -> Optional[str]:
-    """The stored account holding the most values.
-
-    One key per account, written by two different apps, so there is nothing to aggregate and no
-    id worth hard-coding; the richest series is the only sensible thing to land on (KAN-46).
-    """
-    counts = sorted(
-        ((key, len(v)) for key, v in _read_cache_file().items() if isinstance(v, dict) and v),
-        key=lambda kv: (-kv[1], kv[0]),
-    )
-    return counts[0][0] if counts else None
+    """The stored account holding the most values."""
+    return _values.default_account()
 
 
 def is_behind(points: List[Dict[str, Any]], today: Optional[str] = None) -> bool:

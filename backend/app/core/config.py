@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional
+from typing import ClassVar, List, Optional, Tuple
 # deliberately unguarded
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -8,6 +8,25 @@ class Settings(BaseSettings):
         env_file=os.path.join(os.path.dirname(__file__), "..", "..", ".env"),  # backend/.env
         env_file_encoding="utf-8",
         extra="ignore",
+    )
+
+    # Which fields hold credentials, read by `redaction.collect_secret_literals` to decide what to
+    # mask in a log line. Declared here so adding a provider key below is enough to get it
+    # redacted, with no second edit in the redactor. A ClassVar rather than a field, so no
+    # environment variable can switch redaction off.
+    SECRET_FIELD_NAMES: ClassVar[Tuple[str, ...]] = (
+        "JWT_SECRET",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "FIREBASE_API_KEY",
+        "ALPACA_API_KEY",
+        "ALPACA_SECRET_KEY",
+        "EODHD_API_TOKEN",
+        "FINAGE_API_KEY",
+        "TWELVEDATA_API_KEY",
+        "ALPHA_VANTAGE_API_KEY",
+        "POLYGON_API_KEY",
+        "T212_API_KEY",
+        "T212_API_SECRET",
     )
 
     PROJECT_NAME: str = "Portfolio Analytics API"
@@ -48,7 +67,7 @@ class Settings(BaseSettings):
     # (fastapi-portfolio, web-portfolio). Read from backend/.env like everything else here.
     OTEL_SERVICE_NAME: str = "fastapi-portfolio" # override by .env
     OTEL_EXPORTER_OTLP_ENDPOINT: Optional[str] = None
-    OTEL_EXPORTER_OTLP_PROTOCOL: str = "http/protobuf" 
+    OTEL_EXPORTER_OTLP_PROTOCOL: str = "http/protobuf"
     OTEL_EXPORTER_OTLP_HEADERS: Optional[str] = None  # e.g. Authorization=Basic <base64>
     OTEL_RESOURCE_ATTRIBUTES: Optional[str] = None
 
@@ -68,4 +87,3 @@ class Settings(BaseSettings):
     STATEMENTS_DIR: str = "~/Downloads"
 
 settings = Settings()
-

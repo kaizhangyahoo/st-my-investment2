@@ -546,9 +546,13 @@ class TestStartupAnnouncement(unittest.TestCase):
     HEADERS = "Authorization=Basic%20MTIzNDU2Nzg6Z2xjX3Rva2Vu"
 
     def setUp(self):
+        from backend.app.core.config import settings as backend_settings
         from backend.app.core import logging_config
 
         self.logging_config = logging_config
+        # `configure_logging` takes the settings object as an argument now that it lives in
+        # `common`, so the overrides below are applied to the backend's own instance.
+        self.settings = backend_settings
         root = logging.getLogger()
         handlers, level = list(root.handlers), root.level
         literals = list(redaction._secret_literals)
@@ -576,9 +580,9 @@ class TestStartupAnnouncement(unittest.TestCase):
 
     def _configure(self, **settings_overrides):
         for key, value in settings_overrides.items():
-            self._patch(self.logging_config.settings, key, value)
+            self._patch(self.settings, key, value)
         with self.assertLogs("app.startup", "INFO") as captured:
-            self.logging_config.configure_logging()
+            self.logging_config.configure_logging(self.settings)
         self.assertEqual(len(captured.records), 1)
         return captured.records[0]
 
@@ -591,7 +595,7 @@ class TestStartupAnnouncement(unittest.TestCase):
 
         self.assertEqual(record.levelno, logging.INFO)
         self.assertIn(self.ENDPOINT, announced)
-        self.assertIn(self.logging_config.settings.OTEL_SERVICE_NAME, announced)
+        self.assertIn(self.settings.OTEL_SERVICE_NAME, announced)
         self.assertIn("http/protobuf", announced)
 
     def test_the_line_reports_the_transport_used_rather_than_the_one_requested(self):

@@ -10,7 +10,7 @@ from backend.app.core.otel_traces import instrument_app
 from backend.app.api.v1 import auth, portfolio, trades, tickers, market_data, telemetry, trading212
 
 # Before the app exists, so module-level logging in the routers below is already formatted.
-configure_logging()
+configure_logging(settings)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

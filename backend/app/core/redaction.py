@@ -16,20 +16,11 @@ _QUERY_SECRET_RE = re.compile(
     re.IGNORECASE,
 )
 
-_SETTINGS_SECRET_FIELDS = (
-    "FIREBASE_API_KEY",
-    "ALPACA_API_KEY",
-    "ALPACA_SECRET_KEY",
-    "EODHD_API_TOKEN",
-    "FINAGE_API_KEY",
-    "TWELVEDATA_API_KEY",
-    "ALPHA_VANTAGE_API_KEY",
-    "POLYGON_API_KEY",
-    "T212_API_KEY",
-    "T212_API_SECRET",
-    "JWT_SECRET",
-    "OTEL_EXPORTER_OTLP_HEADERS",
-)
+# Which fields hold credentials is the settings object's own business -- it declares them in
+# `SECRET_FIELD_NAMES` (see `backend.app.core.config.Settings`), so a service that adds a provider
+# key does not have to remember to edit this module. These two are the floor, used for an
+# object that declares nothing at all.
+_FALLBACK_SECRET_FIELDS = ("JWT_SECRET", "OTEL_EXPORTER_OTLP_HEADERS")
 
 # Shorter than this and a literal substring replace would mangle unrelated text.
 _MIN_SECRET_LEN = 8
@@ -44,7 +35,7 @@ def collect_secret_literals(settings_obj) -> List[str]:
     OTLP headers value is `Authorization=Basic <token>`, so whitespace and `=` split it as well.
     """
     found = []
-    for field in _SETTINGS_SECRET_FIELDS:
+    for field in getattr(settings_obj, "SECRET_FIELD_NAMES", None) or _FALLBACK_SECRET_FIELDS:
         raw = getattr(settings_obj, field, None)
         if not isinstance(raw, str):
             continue
