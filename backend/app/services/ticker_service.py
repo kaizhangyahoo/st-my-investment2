@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.app.stores.ticker_map import TickerMapStore
 from backend.app.core.cache import ttl_cache
+from backend.app.core.config import settings
 
 _store = TickerMapStore()
 
@@ -20,6 +21,11 @@ TICKER_MAP_TTL = 300
 # prefix of the `cache.ticker_map.*` span attributes, so it must not drift.
 @ttl_cache(ttl=TICKER_MAP_TTL, name="ticker_map")
 def load_ticker_mappings() -> Dict[str, str]:
+    # Split mode: data-api owns the file, so portfolio-api reads it over HTTP. Same cache, TTL
+    # and span attributes either way -- only the body moved.
+    if settings.DATA_API_URL:
+        from backend.app.services import data_client
+        return data_client.fetch_ticker_mappings()
     return _store.read()
 
 

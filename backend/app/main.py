@@ -7,7 +7,9 @@ from backend.app.core.errors import install_exception_handlers
 from backend.app.core.logging_config import configure_logging
 from backend.app.core.middleware import RequestContextMiddleware
 from backend.app.core.otel_traces import instrument_app
-from backend.app.api.v1 import auth, portfolio, trades, tickers, market_data, telemetry, trading212
+from backend.app.api.v1 import (
+    auth, internal, portfolio, trades, tickers, market_data, telemetry, trading212,
+)
 
 # Before the app exists, so module-level logging in the routers below is already formatted.
 configure_logging(settings)
@@ -40,21 +42,28 @@ install_exception_handlers(app)
 # than calling add_middleware. So the access line and every app log land inside the span.
 instrument_app(app, settings)
 
-# API Routers
-app.include_router(auth.router, prefix=settings.API_V1_STR)
-app.include_router(portfolio.router, prefix=settings.API_V1_STR)
-app.include_router(trades.router, prefix=settings.API_V1_STR)
-app.include_router(tickers.router, prefix=settings.API_V1_STR)
-app.include_router(market_data.router, prefix=settings.API_V1_STR)
-app.include_router(trading212.router, prefix=settings.API_V1_STR)
-app.include_router(telemetry.router, prefix=settings.API_V1_STR)
+# API Routers, chosen by SERVICE_ROLE (P2). One image runs as the monolith or as either half of
+# the split. `/internal` exists only on data-api: the monolith has no second service to serve.
+_DATA_ROUTERS = [tickers.router, market_data.router]
+_PORTFOLIO_ROUTERS = [
+    auth.router, portfolio.router, trades.router, trading212.router, telemetry.router,
+]
+_ROUTERS = {
+    "all": _PORTFOLIO_ROUTERS + _DATA_ROUTERS,
+    "portfolio": _PORTFOLIO_ROUTERS,
+    "data": _DATA_ROUTERS + [internal.router],
+}
+if settings.SERVICE_ROLE not in _ROUTERS:
+    raise ValueError(f"SERVICE_ROLE must be one of {sorted(_ROUTERS)}, got {settings.SERVICE_ROLE!r}")
+for _router in _ROUTERS[settings.SERVICE_ROLE]:
+    app.include_router(_router, prefix=settings.API_V1_STR)
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "app": settings.PROJECT_NAME}
+    return {"status": "ok", "app": settings.PROJECT_NAME, "role": settings.SERVICE_ROLE}
 
 # Mount static files in production if frontend build exists
 frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../frontend/dist"))
-if os.path.exists(frontend_dist):
+if settings.SERVICE_ROLE == "all" and os.path.exists(frontend_dist):
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="static")
 

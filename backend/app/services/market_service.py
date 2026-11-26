@@ -5,10 +5,17 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from backend.app.core.cache import MISS, cache, ttl_cache
 from backend.app.core.tracing import annotate, span
-from backend.app.services import fx_store
+from backend.app.stores.fx import PAIRS, FxStore
 from backend.app.services.price_service import get_prices, fetch_yahoo_history
 
 logger = logging.getLogger(__name__)
+
+_fx_store = FxStore()
+
+
+def fx_covered_through() -> Optional[str]:
+    """The last date every GBP cross has a real stored close for, or None."""
+    return _fx_store.covered_through()
 
 _FETCH_ERRORS = (requests.RequestException, ValueError, KeyError, IndexError, TypeError)
 
@@ -107,12 +114,12 @@ def get_historical_fx(start_date: str) -> Tuple[Dict[str, pd.Series], bool]:
     decides what to do about them, and `history_service` withholds them rather than persisting a
     valuation built on a rate nobody quoted (KAN-55).
     """
-    stored = fx_store.read_rates()
-    fetch_start = fx_store.fetch_from(start_date, stored)
+    stored = _fx_store.read()
+    fetch_start = _fx_store.fetch_from(start_date, stored)
     fetched: Dict[str, Dict[str, float]] = {}
     incomplete = False
 
-    for pair in fx_store.PAIRS:
+    for pair in PAIRS:
         try:
             rates = _rate_map(fetch_yahoo_history(pair, fetch_start))
             if not rates:
@@ -125,7 +132,7 @@ def get_historical_fx(start_date: str) -> Tuple[Dict[str, pd.Series], bool]:
             )
 
     if fetched:
-        fx_store.merge_rates(fetched)
+        _fx_store.merge(fetched)
 
     # Trimmed to the window asked for: the store can reach further back than this caller does,
     # and handing back rates it did not ask for would change what `/market-data/fx` returns.
@@ -135,7 +142,7 @@ def get_historical_fx(start_date: str) -> Tuple[Dict[str, pd.Series], bool]:
             for day, rate in {**stored.get(pair, {}), **fetched.get(pair, {})}.items()
             if day >= start_date
         }
-        for pair in fx_store.PAIRS
+        for pair in PAIRS
     }
     if any(not rates for rates in combined.values()):
         logger.error(

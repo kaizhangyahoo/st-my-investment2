@@ -95,7 +95,7 @@ class TestQuotesDegradationLog(_Case):
 class TestFxFallbackLog(_Case):
     def _get(self, fallback, covered="2024-01-02"):
         with patch.object(market_data, "get_historical_fx", lambda start: (FX, fallback)), \
-                patch.object(market_data.fx_store, "covered_through", lambda: covered):
+                patch.object(market_data, "fx_covered_through", lambda: covered):
             with self.assertLogs(LOGGER, logging.DEBUG) as captured:
                 res = self.client.get("/api/v1/market-data/fx")
         self.assertEqual(res.status_code, 200)

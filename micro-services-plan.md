@@ -12,9 +12,8 @@
 | Service | Routes | Code origin | External deps | Owned state |
 |---|---|---|---|---|
 | **gateway** (nginx) | `/` (SPA), proxy `/api/v1/*` | `frontend/` multi-stage build | – | – |
-| **portfolio-api** | `/trades/*`, `/portfolio/*`, `/telemetry/*` | `api/v1/trades.py`, `portfolio.py`, `telemetry.py`; services `portfolio_engine`, `history_service`, `realised_pnl`, `risk_metrics`, `benchmark_service` | market-data, reference-data (HTTP) | `user_portfolio_values.json`, statements dir |
-| **market-data** | `/market-data/quotes`, `/fx`, `/ohlc/{ticker}`, internal `/price-history` | `market_service`, `price_service`, `fx_store` | Yahoo, TwelveData, EODHD | `fx_history.json`, caches |
-| **reference-data** | `/tickers/mappings` (GET/PUT), `/tickers/resolve` | `ticker_service`, `shared_service/ticker_resolution.py` | SEC EDGAR | `company_name_to_ticker.json` |
+| **portfolio-api** | `/trades/*`, `/portfolio/*`, `/telemetry/*` | `api/v1/trades.py`, `portfolio.py`, `telemetry.py`; services `portfolio_engine`, `history_service`, `realised_pnl`, `risk_metrics`, `benchmark_service` | data-api (HTTP) | `user_portfolio_values.json`, statements dir |
+| **data-api** | `/market-data/quotes`, `/fx`, `/ohlc/{ticker}`, `/tickers/mappings` (GET/PUT), `/tickers/resolve`, internal batch `/price-history` | `market_service`, `price_service`, `ticker_service`, `stores/fx.py`, `stores/ticker_map.py`, `shared_service/ticker_resolution.py` | Yahoo, TwelveData, EODHD, SEC EDGAR | `fx_history.json`, `company_name_to_ticker.json` |
 | **trading212** | `/trading212/*` | `t212_service`, `shared_service/trading212_api.py` | Trading212 API | instrument cache |
 | **ig-ingest** (job) | none | `ig/` | IG via Playwright | `news_output`, statements |
 | **alloy / collector** (optional) | OTLP 4317/4318 | – | Grafana Cloud | – |
@@ -58,31 +57,86 @@
   - `docker compose up --build` works and every tab works.
   - The legacy app sees the same JSON files.
 
-### P1: Shared library and store interfaces
+### P1: Store interfaces and the propagating HTTP client — DONE (absorbed, not a phase)
 
+**Status:** done — stores + atomic writes. `core/http.py` was pulled forward from P2; its first
+caller (`services/data_client.py`) and the removal of the `services/fx_store.py` shim both landed
+with P2.
+
+Done, and deliberately not kept as a milestone: its own acceptance criterion was "nothing behaves
+differently", which is no outcome at all. What exists is the precondition for P2:
+
+- `backend/app/stores/{fx,ticker_map,portfolio_values}.py` — the three stores, JSON-backed, each
+  writing through `core/json_store.py` (temp file + rename, so a crash mid-write cannot truncate a
+  shared file).
+- `backend/app/core/http.py` — `PropagatingSession`, which passes on `X-Request-ID` and the W3C
+  `traceparent` header. No callers until P2; it is what satisfies P2's cross-service log join.
+
+**The `common` package was considered and rejected.** `backend/app/core` is already a leaf (nothing
+in it imports `services/` or `api/`), so renaming it bought the name and not the property, and the
+split needs no second image (see the one-image decision in P2). The standing rule that replaces it:
+**a module does not move to a shared location until a second service actually imports it.**
+
+### P2: Extract data-api (market-data + reference-data, merged) — IMPLEMENTED
+
+**Status:** code done, suite green (532 tests, incl. `test/functionalTest/test_data_api_split.py`).
+Not yet verified on Docker; the cross-service request-ID check in Grafana is still open.
+
+- **As built:**
+  - `SERVICE_ROLE` (`all` | `portfolio` | `data`) picks the routers in `main.py`. `all` is the
+    monolith and the default, so the laptop and the RPi run exactly as before.
+  - `DATA_API_URL` switches `services/data_client.py` from in-process to HTTP. `history_service`
+    and `portfolio_engine` import prices / FX / coverage from it; `ticker_service.load_ticker_mappings`
+    swaps its body when the URL is set.
+  - data-api serves `/api/v1/internal/{quotes,fx,fx/coverage,price-history,ticker-mappings}`,
+    mounted only under `SERVICE_ROLE=data`. No user auth: the gateway returns 404 for
+    `/api/v1/internal/`, and the routes don't exist on the monolith.
+  - data-api failures degrade like provider failures (unpriced + recorded failure; FX fallback
+    with no coverage), except ticker mappings, which raise rather than cache an empty map.
+  - Gateway: `nginx.conf.template` routes `/api/v1/(market-data|tickers)/` to
+    `${DATA_API_UPSTREAM}` (default `backend:8000`).
+  - `docker-compose.split.yml` overlays the split:
+    `docker compose -f docker-compose.yml -f docker-compose.split.yml up -d --build`.
+  - `services/fx_store.py` removed; `market_service` owns an `FxStore` and exposes
+    `fx_covered_through()`.
+
+- **Depends on:** nothing outstanding.
+- **Why merged:** the two were never independent. Same shape (call a provider, cache, serve), same
+  consumers, and `ticker_service` already has five internal callers that overlap almost entirely
+  with market-data's three. `history_service` alone touches all three JSON files. Split in two, one
+  `POST /portfolio/history/compute` fans out to both; merged, it fans out to one.
 - **Tasks:**
-  - Package `backend/app/core` and the shared schemas as `common`.
-  - Add `TickerMapStore`, `PortfolioValuesStore` and `FxStore`, each backed by JSON for now.
-  - Add an HTTP client that passes on `X-Request-ID` and the W3C `traceparent` header.
-- **Done when:** tests pass and nothing behaves differently.
-
-### P2: Extract market-data
-
-- **Depends on:** P1.
-- **Tasks:** `history_service` and `portfolio_engine` call market-data over the HTTP client instead of importing it.
+  - `history_service` and `portfolio_engine` call data-api over `backend/app/core/http.py` instead
+    of importing `market_service` / `ticker_service`.
+  - **Expose `/price-history` as a batch endpoint.** `history_service._price_frame` loops tickers
+    sequentially and emits one span per ticker precisely because that loop is the suspected
+    bottleneck of the route. N HTTP calls would make it strictly worse; one batch call per request
+    makes it better than today.
+  - **Reuse the existing ticker-map cache seam.** Swap the *body* of
+    `ticker_service.load_ticker_mappings` from `_store.read()` to an HTTP GET. Its
+    `@ttl_cache(ttl=300, name="ticker_map")`, the TTL and the `cache.ticker_map.*` span attributes
+    all survive untouched. Keep the cache on the module-level function, never on a method —
+    `ttl_cache` keys on stringified args, so `self`'s address-bearing repr would miss every call.
+  - **Remove the `services/fx_store.py` shim in the same change that introduces the first
+    `PropagatingSession` caller.** `market_service` and the market-data route import
+    `backend.app.stores.fx.FxStore` directly; tests patch the store, not the shim. Doing both in
+    one change means `http.py` is exercised by a real caller the moment the FX path is rewired,
+    and no second indirection survives into data-api.
+- **Packaging:** one image, two uvicorn commands — not a second Dockerfile. Compose already builds
+  `portfolio-backend:local`; data-api reuses it with a different uvicorn target. The HTTP boundary
+  is what decouples the code; a separate image and dependency set buys nothing at this scale and
+  doubles the arm64+amd64 build matrix.
 - **Done when:**
-  - The price fallback, OHLC and history tests pass.
+  - The price fallback, OHLC, history, ticker map, mapping save and unresolved-symbol gate tests pass.
   - The same request ID appears in the logs of both services.
 
 ### P3: Extract reference-data
 
-- **Depends on:** P1. Can run in parallel with P2.
-- **Tasks:** portfolio-api keeps a briefly cached copy of the ticker map.
-- **Done when:** the ticker map, mapping save and unresolved-symbol gate tests pass.
+Merged into P2 — data-api owns both JSON files and both route groups.
 
 ### P4: Extract trading212
 
-- **Depends on:** P1 (can be done any time after it).
+- **Depends on:** nothing outstanding (the HTTP client it needs already exists).
 - **Done when:** the Trading212 endpoint tests pass.
 
 ### P5: ig-ingest job
@@ -102,7 +156,7 @@
 ### PA: Authentication
 
 - Re-enable Firebase login.
-- Put the JWT check in `common`.
+- Keep the JWT check in `backend/app/core/security.py`; data-api gets it by running the same image.
 - Add a frontend login page.
 - Turn `DISABLE_AUTH` off.
 
@@ -124,12 +178,11 @@
 
 ### S2: Login page
 
-- **Phases:** P1 + PA.
-- **Do:** add the store interfaces now, in preparation for the cloud stages.
+- **Phases:** PA. (The store interfaces this stage used to wait for already exist.)
 
 ### S3: Cloud Run
 
-- **Phases:** P2, P3, P4, P6.
+- **Phases:** P2, P4, P6.
 - **Do:**
   - Move the ticker map and portfolio values to Firestore here. A stopgap is a GCS volume with `max_instances=1`.
   - Persist the trades store to GCS or Firestore.
@@ -171,7 +224,7 @@
   - AWS Secrets Manager, synced through the External Secrets Operator.
 - **Failover:** Route 53 health checks.
 - **Data (decided: sync to DynamoDB):**
-  - Add a DynamoDB implementation behind the P1 store interfaces; EKS uses DynamoDB, GKE uses Firestore.
+  - Add a DynamoDB implementation behind the `backend/app/stores/` interfaces; EKS uses DynamoDB, GKE uses Firestore.
   - Replicate Firestore → DynamoDB continuously (Firestore change triggers / Cloud Function or Eventarc → writer into DynamoDB). Survives a full GCP outage.
   - Use DynamoDB global tables for multi-region inside AWS.
   - Active/passive keeps one writer at a time, so one-way sync is enough day to day. On failover, DynamoDB becomes primary; failback needs a reverse sync (DynamoDB Streams → Firestore) before switching back.
@@ -193,5 +246,5 @@
 
 ## Split timing
 
-- S1–S2: gateway + one backend + ig-ingest job (P0, P5, P1, PA).
-- S3 onwards: full split (P2, P3, P4, P6).
+- S1–S2: gateway + one backend + ig-ingest job (P0, P5, PA).
+- S3 onwards: full split (P2, P4, P6).

@@ -27,8 +27,12 @@ import pandas as pd
 
 from backend.app.stores.portfolio_values import KEY_PREFIX, PortfolioValuesStore, portfolio_key
 from backend.app.core.tracing import span
-from backend.app.services import fx_store
-from backend.app.services.market_service import get_historical_fx, get_price_history
+from backend.app.services import data_client
+from backend.app.services.data_client import (
+    fx_covered_through,
+    get_historical_fx,
+    get_price_history,
+)
 from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker
 
 logger = logging.getLogger(__name__)
@@ -89,7 +93,7 @@ def _fx_frames(
         # approximated constants rather than real closes, so their index says nothing about what
         # is backed: `get_historical_fx` only falls back once every stored rate has been
         # exhausted, and it stores every real close it fetches.
-        approximated = fx_fallback and fx_store.covered_through() is None
+        approximated = fx_fallback and fx_covered_through() is None
         real_through = None if approximated or not ends else min(ends)
 
         active.set_attribute("fx.pairs", len(aligned))
@@ -109,13 +113,19 @@ def _price_frame(
     currencies: Dict[str, Optional[str]] = {}
     unpriced: List[str] = []
     with span("history.price_frame", **{"price.tickers": len(tickers)}) as active:
+        # Split mode: one batch call to data-api rather than one round trip per ticker. The
+        # per-ticker spans below still mark where each series came from, just not its fetch.
+        remote = data_client.remote()
+        batch = data_client.get_price_histories(tickers, start_date) if remote else {}
         for ticker in tickers:
             # One span per ticker: this loop is sequential, so it is the suspected bottleneck of
             # the whole route, and an aggregate would hide which ticker cost the time. The
             # ticker is an attribute value, never part of the span name, so the name stays one
             # constant per site.
             with span("history.price_history", **{"price.ticker": ticker}) as fetch:
-                df, currency = get_price_history(ticker, start_date)
+                df, currency = (
+                    batch[ticker] if remote else get_price_history(ticker, start_date)
+                )
                 fetch.set_attribute("price.rows", len(df))
                 fetch.set_attribute("price.currency", currency or "unknown")
             if df.empty:

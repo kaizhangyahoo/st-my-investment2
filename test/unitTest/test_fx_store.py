@@ -17,8 +17,13 @@ import requests
 
 from backend.app.core.cache import cache
 from backend.app.core.config import settings
-from backend.app.services import fx_store, market_service
+from backend.app.services import market_service
+from backend.app.stores.fx import FxStore
 from test.support.portfolio import fx_frame, temp_fx_store
+
+# The store reads `settings.FX_HISTORY_FILE` on every call, so one instance follows each test's
+# redirect.
+fx_store = FxStore()
 
 TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 YESTERDAY = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -46,12 +51,12 @@ class StoreCase(unittest.TestCase):
 
 class TestReadingTheStore(StoreCase):
     def test_a_missing_file_is_an_empty_store_not_an_error(self):
-        self.assertEqual(fx_store.read_rates(), {})
+        self.assertEqual(fx_store.read(), {})
 
     def test_unreadable_contents_degrade_to_an_empty_store(self):
         # A half-written or hand-edited file must not take the dashboard down with it.
         self.write("{not json")
-        self.assertEqual(fx_store.read_rates(), {})
+        self.assertEqual(fx_store.read(), {})
 
     def test_a_malformed_entry_does_not_cost_us_the_rest_of_the_history(self):
         self.write(json.dumps({
@@ -64,14 +69,14 @@ class TestReadingTheStore(StoreCase):
             },
             "GBPEUR=X": "not a series",
         }))
-        self.assertEqual(fx_store.read_rates(), {"GBPUSD=X": {"2024-03-01": 1.29}})
+        self.assertEqual(fx_store.read(), {"GBPUSD=X": {"2024-03-01": 1.29}})
 
 
 class TestMergingRates(StoreCase):
     SEED_FX = SEED
 
     def test_new_dates_are_added_without_dropping_the_old_ones(self):
-        fx_store.merge_rates({"GBPUSD=X": {"2024-03-04": 1.31}})
+        fx_store.merge({"GBPUSD=X": {"2024-03-04": 1.31}})
         self.assertEqual(
             self.stored()["GBPUSD=X"],
             {"2024-02-29": 1.27, "2024-03-01": 1.29, "2024-03-04": 1.31},
@@ -79,24 +84,24 @@ class TestMergingRates(StoreCase):
         self.assertEqual(self.stored()["GBPEUR=X"], SEED["GBPEUR=X"])
 
     def test_a_refetched_date_is_corrected_rather_than_kept(self):
-        fx_store.merge_rates({"GBPUSD=X": {"2024-03-01": 1.30}})
+        fx_store.merge({"GBPUSD=X": {"2024-03-01": 1.30}})
         self.assertEqual(self.stored()["GBPUSD=X"]["2024-03-01"], 1.30)
 
     def test_todays_rate_is_served_but_never_settled(self):
         # Yahoo's last row is the in-progress bar. Storing it would hand tomorrow's caller an
         # intraday snapshot as though it were the close.
-        fx_store.merge_rates({"GBPUSD=X": {YESTERDAY: 1.32, TODAY: 1.33}})
+        fx_store.merge({"GBPUSD=X": {YESTERDAY: 1.32, TODAY: 1.33}})
         stored = self.stored()["GBPUSD=X"]
         self.assertIn(YESTERDAY, stored)
         self.assertNotIn(TODAY, stored)
 
     def test_nothing_worth_storing_leaves_the_file_alone(self):
         before = os.stat(self.store).st_mtime_ns
-        fx_store.merge_rates({"GBPUSD=X": {TODAY: 1.33}})
+        fx_store.merge({"GBPUSD=X": {TODAY: 1.33}})
         self.assertEqual(os.stat(self.store).st_mtime_ns, before)
 
     def test_the_write_leaves_no_temporary_file_behind(self):
-        fx_store.merge_rates({"GBPUSD=X": {"2024-03-04": 1.31}})
+        fx_store.merge({"GBPUSD=X": {"2024-03-04": 1.31}})
         directory = os.path.dirname(self.store)
         self.assertEqual(
             [name for name in os.listdir(directory) if name != "fx_history.json"], []
@@ -108,7 +113,7 @@ class TestCoverage(StoreCase):
 
     def test_coverage_ends_where_the_shorter_pair_does(self):
         # A valuation can hold both USD and EUR, so a date is only sound if every cross is real.
-        fx_store.merge_rates({"GBPUSD=X": {"2024-03-04": 1.31}})
+        fx_store.merge({"GBPUSD=X": {"2024-03-04": 1.31}})
         self.assertEqual(fx_store.covered_through(), "2024-03-01")
 
     def test_a_pair_with_no_history_means_no_coverage(self):

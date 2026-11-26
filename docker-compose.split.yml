@@ -1,0 +1,43 @@
+# P2 split: portfolio-api (the `backend` service) + data-api, from the same image.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.split.yml up -d --build
+# Without this file, `backend` stays the monolith (SERVICE_ROLE=all) as on the RPi.
+
+services:
+  backend:
+    environment:
+      SERVICE_ROLE: portfolio
+      DATA_API_URL: http://data-api:8000
+      OTEL_SERVICE_NAME: portfolio-api
+    depends_on:
+      data-api:
+        condition: service_healthy
+
+  # Owns company_name_to_ticker.json and fx_history.json; the only writer of both.
+  data-api:
+    image: portfolio-backend:local
+    env_file:
+      - backend/.env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-internal}
+      LOG_FORMAT: json
+      SERVICE_ROLE: data
+      OTEL_SERVICE_NAME: data-api
+      TICKER_MAP_FILE: /data/company_name_to_ticker.json
+      FX_HISTORY_FILE: /data/fx_history.json
+    volumes:
+      - ${DATA_DIR:-.}:/data
+    depends_on:
+      otel-collector:
+        condition: service_started
+        required: false
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  gateway:
+    environment:
+      DATA_API_UPSTREAM: data-api:8000
+    depends_on:
+      data-api:
+        condition: service_healthy

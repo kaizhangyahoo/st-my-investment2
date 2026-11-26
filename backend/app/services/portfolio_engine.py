@@ -5,7 +5,7 @@ import os
 import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
-from backend.app.services.market_service import get_current_prices, get_historical_fx
+from backend.app.services.data_client import get_current_prices, get_historical_fx
 from backend.app.services.ticker_service import load_ticker_mappings, resolve_ticker, find_unresolved_symbols
 from backend.app.core.config import settings
 from backend.app.core.tracing import span
