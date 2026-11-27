@@ -15,7 +15,7 @@
 | **portfolio-api** | `/trades/*`, `/portfolio/*`, `/telemetry/*` | `api/v1/trades.py`, `portfolio.py`, `telemetry.py`; services `portfolio_engine`, `history_service`, `realised_pnl`, `risk_metrics`, `benchmark_service` | data-api (HTTP) | `user_portfolio_values.json`, statements dir |
 | **data-api** | `/market-data/quotes`, `/fx`, `/ohlc/{ticker}`, `/tickers/mappings` (GET/PUT), `/tickers/resolve`, internal batch `/price-history` | `market_service`, `price_service`, `ticker_service`, `stores/fx.py`, `stores/ticker_map.py`, `shared_service/ticker_resolution.py` | Yahoo, TwelveData, EODHD, SEC EDGAR | `fx_history.json`, `company_name_to_ticker.json` |
 | **trading212** | `/trading212/*` | `t212_service`, `shared_service/trading212_api.py` | Trading212 API | instrument cache |
-| **ig-ingest** (job) | none | `ig/` | IG via Playwright | `news_output`, statements |
+| **ig-ingest** (on-demand worker) | `/ig/session`, `/ig/statements/sync`, `/ig/news` | `ig/` | IG via Playwright | `news_output`, statements dir (sole writer) |
 | **alloy / collector** (optional) | OTLP 4317/4318 | – | Grafana Cloud | – |
 | **redis** (optional) | – | replaces in-process caches in `core/cache.py` | – | – |
 
@@ -152,12 +152,81 @@ Merged into P2 — data-api owns both JSON files and both route groups.
 - **Depends on:** nothing outstanding.
 - **Done when:** the Trading212 endpoint tests pass, and the gateway reaches the service in Docker.
 
-### P5: ig-ingest job
+### P5: ig-ingest (frontend-triggered) — PLANNED, not started
 
 - **Depends on:** nothing; independent of the other phases.
-- **Tasks:**
-  - Fold `ig/` into the root compose file under `profiles: [jobs]`.
-  - The job writes to the statements volume.
+- **What it does:** two tasks, chosen by which frontend button is clicked. Each click is one run;
+  there is no schedule.
+  1. **Sync statements:** log in to IG, download the latest `Trade*.csv` and `Transaction*.csv`
+     into the statements volume, then delete the older `Trade*.csv` / `Transaction*.csv` there.
+     The backend's existing autoload (`find_latest_download_files` in `api/v1/trades.py`,
+     reading `STATEMENTS_DIR`) picks them up unchanged.
+  2. **Instrument news:** log in, search IG news for one instrument, return the headlines to the
+     frontend and append them to `news_output/ig.news.<instrument>.{csv,md}` (existing headline
+     dedup kept).
+- **Shape — an on-demand worker, not a compose job.** A `profiles: [jobs]` container cannot be
+  started by a browser click without giving the backend the Docker socket (root on the host), so
+  that is rejected. `ig-ingest` is a long-running FastAPI service in its own image (the Playwright
+  base is ~1.5 GB, so it does not join `portfolio-backend:local`). It is idle between clicks;
+  Chromium is launched per request and closed afterwards. One run at a time; a concurrent click
+  gets 409.
+  - `POST /api/v1/ig/session` — body `{username, password}`; logs in, sets the session cookie.
+  - `POST /api/v1/ig/statements/sync` — task 1; returns the new filenames and how many were removed.
+  - `POST /api/v1/ig/news` — body `{instrument, max_items}`; task 2; returns the headlines.
+  - `GET /health`.
+  - Gateway: `location /api/v1/ig/` → `${IG_UPSTREAM}`, `proxy_read_timeout` ≥ 180s (the login
+    alone waits ~15s for the platform).
+- **Credentials:** prompt on the first click of either button, reuse for the other. **The password
+  is never stored in a cookie or browser storage** (readable by any XSS, sent on every request):
+  - The frontend posts username + password once to `/ig/session`.
+  - ig-ingest logs in, keeps only the Playwright `storage_state` (IG's own session cookies) in
+    memory under a random id, and discards the password.
+  - That id is returned as a cookie: `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/ig`,
+    max-age ~30 min to match IG's session.
+  - Later clicks send only the cookie. When IG expires the session or ig-ingest restarts, the
+    endpoint returns 401 and the frontend prompts again.
+  - Credentials never appear in argv, logs or span attributes (today's scripts pass `--password`
+    on the command line, visible in `ps` and `docker inspect`).
+- **Code changes:**
+  - `ig/ig.sequentially.news.download.py` — the one script kept. Split `run()` into
+    `login(page, username, password)` → storage state, `scrape_news_for_instrument` (exists), and
+    a new `download_statements(page, dest_dir)`. The CLI `main()` stays for manual runs but reads
+    `IG_USERNAME` / `IG_PASSWORD` from the environment, and drops the hardcoded default username.
+  - `ig/service.py` (new) — the FastAPI app, calling those functions in a worker thread
+    (`sync_playwright` cannot run on the event loop).
+  - `ig/Dockerfile.news` — run `uvicorn ig.service:app`; remove `COPY alpaca_client.py` and
+    `COPY company_name_to_ticker.json` (the sequential script imports neither; the map was only
+    reachable through the optional `--input` flag).
+  - Delete `ig/ig.async.5semaphore.news.download.py` (sequential kept: lower RAM on the RPi4).
+  - Delete `ig/docker-compose.news.yml` (duplicates the root compose; hardcodes a username).
+  - `ig/README.md` — rewrite for the service.
+  - `docker-compose.yml` — replace the `ig-news` job with an `ig-ingest` service: no profile,
+    `restart: unless-stopped`, `${STATEMENTS_DIR:-./statements}:/statements` read-write (still
+    `:ro` on `backend`, so ig-ingest is the only writer) and
+    `${NEWS_OUTPUT_DIR:-./news_output}:/news_output`. No IG credentials in `.env`.
+  - `frontend/nginx.conf.template` + `frontend/Dockerfile` — the `/api/v1/ig/` route and the
+    `IG_UPSTREAM` default (`ig-ingest:8000`).
+  - Frontend:
+    - `services/` — an `igIngest` client (`createSession`, `syncStatements`, `fetchNews`) with
+      `credentials: 'include'`; a 401 means "prompt again".
+    - A shared `IgLoginPrompt` modal plus a hook that opens it on 401 and retries the click once.
+    - `components/dashboard/IgAnalyticsView.tsx` — a "Sync from IG" button beside the upload
+      control; on success, the same refresh as `onUploadComplete`.
+    - `components/trading212/T212View.tsx` — a "News" button next to the `NET UNREALISED P&L`
+      label in the Single Instrument Inspector & Execution Blotter; headlines show in the
+      inspector. (The IG inspector in `IgAnalyticsView.tsx` has no such label; add it there too
+      if wanted.)
+- **Deletion rule for old statements:** only `Trade*.csv` / `Transaction*.csv` directly in
+  `/statements`, only after the new pair has been written and parsed; never recurse, never follow
+  symlinks.
+- **Done when:**
+  - "Sync from IG" leaves exactly one new `Trade*.csv` + `Transaction*.csv` in the statements
+    volume and the IG tab reloads from them.
+  - "News" in the inspector shows headlines, and `news_output` gains them.
+  - The second button does not prompt again within the session; after expiry it does.
+  - No password in `docker inspect`, logs or traces.
+  - Unit tests with Playwright stubbed: cookie flags, 401 on unknown session, 409 on a concurrent
+    run, old statements deleted only after a successful download.
 
 ### P6: Slim down portfolio-api
 
@@ -215,7 +284,7 @@ Merged into P2 — data-api owns both JSON files and both route groups.
 - **Do:**
   - Helm charts.
   - Gateway API / GCLB ingress.
-  - ig-ingest as a CronJob.
+  - ig-ingest as a Deployment (one replica; event-triggered from the frontend, not a CronJob).
   - Alloy DaemonSet sending to Grafana Cloud.
   - Workload Identity for Firestore access.
   - Secret Manager CSI driver.
