@@ -52,6 +52,8 @@ _ROUTERS = {
     "all": _PORTFOLIO_ROUTERS + _DATA_ROUTERS,
     "portfolio": _PORTFOLIO_ROUTERS,
     "data": _DATA_ROUTERS + [internal.router],
+    # P4. Nothing else calls it, so it needs no /internal routes; the gateway routes to it directly.
+    "trading212": [trading212.router],
 }
 if settings.SERVICE_ROLE not in _ROUTERS:
     raise ValueError(f"SERVICE_ROLE must be one of {sorted(_ROUTERS)}, got {settings.SERVICE_ROLE!r}")

@@ -35,9 +35,31 @@ services:
       - "8000"
     restart: unless-stopped
 
+  # P4: Trading212 on its own. Stateless apart from the in-process instrument cache; credentials
+  # arrive per request, so it needs no data volume.
+  trading212:
+    image: portfolio-backend:local
+    env_file:
+      - backend/.env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-internal}
+      LOG_FORMAT: json
+      SERVICE_ROLE: trading212
+      OTEL_SERVICE_NAME: trading212
+    depends_on:
+      otel-collector:
+        condition: service_started
+        required: false
+    expose:
+      - "8000"
+    restart: unless-stopped
+
   gateway:
     environment:
       DATA_API_UPSTREAM: data-api:8000
+      T212_UPSTREAM: trading212:8000
     depends_on:
       data-api:
         condition: service_healthy
+      trading212:
+        condition: service_started

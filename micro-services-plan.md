@@ -134,10 +134,23 @@ Not yet verified on Docker; the cross-service request-ID check in Grafana is sti
 
 Merged into P2 — data-api owns both JSON files and both route groups.
 
-### P4: Extract trading212
+### P4: Extract trading212 — IMPLEMENTED
 
-- **Depends on:** nothing outstanding (the HTTP client it needs already exists).
-- **Done when:** the Trading212 endpoint tests pass.
+**Status:** code done, suite green (534 tests). Not yet verified on Docker.
+
+- **As built:**
+  - `SERVICE_ROLE=trading212` mounts only the Trading212 router. Nothing else calls it, so there
+    are no `/internal` routes and no HTTP client.
+  - `portfolio` and `all` still mount it; P6 removes it from `portfolio`.
+  - `docker-compose.split.yml` adds a `trading212` service (same image) and sets `T212_UPSTREAM`
+    on the gateway.
+  - Gateway: `nginx.conf.template` now routes `/api/v1/trading212/` to `${T212_UPSTREAM}` and
+    `/api/v1/(market-data|tickers)/` to `${DATA_API_UPSTREAM}` (both default to `backend:8000`),
+    and returns 404 for `/api/v1/internal/`. `frontend/Dockerfile` now installs it as an nginx
+    template; before this it still copied the renamed `nginx.conf`, so the P2 routing was not
+    in the image.
+- **Depends on:** nothing outstanding.
+- **Done when:** the Trading212 endpoint tests pass, and the gateway reaches the service in Docker.
 
 ### P5: ig-ingest job
 

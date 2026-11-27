@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     # monolith (laptop, RPi), "portfolio" and "data" are the two halves of the split. With
     # DATA_API_URL set, market data, FX and ticker mappings are fetched from data-api over HTTP
     # instead of computed in-process; unset, everything stays in-process.
-    SERVICE_ROLE: str = "all"  # all | portfolio | data
+    SERVICE_ROLE: str = "all"  # all | portfolio | data | trading212
     DATA_API_URL: Optional[str] = None  # e.g. http://data-api:8000
     DATA_API_TIMEOUT: float = 120.0  # a cold price-history batch can take a while
 
